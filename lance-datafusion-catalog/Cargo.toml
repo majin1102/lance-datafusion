@@ -14,6 +14,8 @@ dashmap = "6"
 datafusion = "50.0.0"
 datafusion-common = "50.0.0"
 datafusion-sql = "50.0.0"
+datafusion-catalog = "50.0.0"
+datafusion-session = "50.0.0"
 
 # Lance core crates from git (tagged to v2.0.0-beta.4)
 lance = { git = "https://github.com/lance-format/lance", package = "lance", tag = "v2.0.0-beta.4", default-features = false }
