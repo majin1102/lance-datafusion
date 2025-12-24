@@ -7,7 +7,7 @@ This crate provides a `CatalogProvider` implementation for [Apache DataFusion](h
 - **Namespace as Schema**: Maps a `LanceNamespace` to a DataFusion `SchemaProvider`.
 - **Directory Namespace Support**: Easily register a directory of Lance datasets (e.g., `s3://bucket/data/`, `/path/to/data/`) as a schema.
 - **Dynamic Table Resolution**: Tables are resolved on-the-fly by calling `namespace.describe_table()` to get the dataset URI.
-- **Minimal DML Support**: Includes an entry point `execute_lance_sql` for basic `DELETE` operations on Lance tables.
+- **Minimal DML Support**: Includes an entry point `execute_lance_sql` for basic `DELETE`, `UPDATE`, and `MERGE INTO` operations on Lance tables.
 
 ## Usage
 
@@ -54,7 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-### 3. Executing DML (DELETE)
+### 3. Executing DML (DELETE / UPDATE / MERGE INTO)
 
 This crate provides a separate function `execute_lance_sql` for DML operations. This is an initial implementation and is not a replacement for DataFusion's full DML capabilities.
 
@@ -83,6 +83,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "DELETE FROM my_lance_catalog.default.foo WHERE x >= 10"
     ).await?;
 
+    // Update some rows
+    execute_lance_sql(
+        &ctx,
+        "UPDATE my_lance_catalog.default.foo SET x = x + 1 WHERE id BETWEEN 5 AND 9"
+    ).await?;
+
+    // Merge from another table (simplified example)
+    execute_lance_sql(
+        &ctx,
+        "MERGE INTO my_lance_catalog.default.foo AS t \
+         USING my_lance_catalog.default.bar AS s \
+         ON t.id = s.id \
+         WHEN MATCHED THEN UPDATE SET x = s.x \
+         WHEN NOT MATCHED THEN INSERT (id, x) VALUES (s.id, s.x)"
+    ).await?;
+
     // Verify new count
     let final_count = ctx.sql("SELECT COUNT(*) FROM my_lance_catalog.default.foo").await?.collect().await?;
     println!("Final count: {:?}", final_count);
@@ -95,7 +111,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 This is an initial implementation with several areas for improvement:
 
-- **DML Support**: Only simple `DELETE` statements are supported via `execute_lance_sql`. The plan is to expand this to `UPDATE` and `MERGE INTO`, and eventually integrate more deeply with DataFusion's native DML handling.
+- **DML Support**: Only a constrained subset of `DELETE`, `UPDATE`, and `MERGE INTO` statements are supported via `execute_lance_sql`. The implementation focuses on single-table DELETE, simple UPDATE without `FROM` / `RETURNING` / `ORDER BY` / `LIMIT`, and a minimal MERGE form (single equality join key, one WHEN MATCHED + one WHEN NOT MATCHED). The long-term plan is to expand coverage and integrate more deeply with DataFusion's native DML handling.
 - **Async Catalog API**: The current implementation uses DataFusion's synchronous `CatalogProvider` and `SchemaProvider` traits. For namespaces with high-latency (e.g., remote services), this can block the query planner. Future work will involve implementing the `AsyncCatalogProvider` traits for better performance.
 - **View and UDF Placement**: There is currently no strategy for managing views or user-defined functions within the Lance catalog structure. This will be explored in future iterations.
 - **Table Listing**: `SchemaProvider::table_names()` is not yet implemented due to the synchronous nature of the API. Table discovery currently relies on direct lookups via `table()`.
