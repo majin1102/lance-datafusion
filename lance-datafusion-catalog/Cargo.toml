@@ -6,6 +6,11 @@ license = "Apache-2.0"
 description = "DataFusion CatalogProvider integration for Lance using lance-namespace."
 readme = "README.md"
 
+[features]
+default = []
+rest = []
+
+
 [dependencies]
 async-trait = "0.1"
 dashmap = "6"

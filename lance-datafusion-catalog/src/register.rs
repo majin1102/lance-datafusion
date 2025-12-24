@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#![allow(dead_code)]
 
 use std::sync::Arc;
 
@@ -14,7 +15,7 @@ use crate::{LanceCatalogProvider, LanceCatalogProviderList};
 /// given session.
 ///
 /// This replaces DataFusion's default in-memory catalog list.
-pub fn register_lance_catalog_provider_list(
+pub(crate) fn register_lance_catalog_provider_list(
     ctx: &SessionContext,
     list: Arc<LanceCatalogProviderList>,
 ) {
@@ -22,7 +23,7 @@ pub fn register_lance_catalog_provider_list(
 }
 
 /// Register a [`LanceCatalogProvider`] under the given catalog name.
-pub fn register_lance_catalog(
+pub(crate) fn register_lance_catalog(
     ctx: &SessionContext,
     catalog_name: &str,
     catalog: Arc<LanceCatalogProvider>,
@@ -36,7 +37,7 @@ pub fn register_lance_catalog(
 ///
 /// This is the easiest way to get started when the dataset layout is
 /// `root/<table>.lance`.
-pub async fn register_directory_namespace_as_schema(
+pub(crate) async fn register_directory_namespace_as_schema(
     ctx: &SessionContext,
     catalog_name: &str,
     schema_name: &str,

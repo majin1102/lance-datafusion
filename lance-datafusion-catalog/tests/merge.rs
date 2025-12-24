@@ -5,13 +5,11 @@ use std::sync::Arc;
 use arrow_array::{Int32Array, RecordBatch, RecordBatchIterator};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::error::DataFusionError;
-use datafusion::prelude::SessionContext;
 use lance::dataset::Dataset;
-use lance_datafusion_catalog::dml::execute_lance_sql;
-use lance_datafusion_catalog::register::register_directory_namespace_as_schema;
+use lance_datafusion_catalog::{NamespaceConfig, Session};
 use tempfile::TempDir;
 
-async fn count_rows(ctx: &SessionContext, sql: &str) -> Result<i64, DataFusionError> {
+async fn count_rows(ctx: &Session, sql: &str) -> Result<i64, DataFusionError> {
     use arrow_array::{Int64Array, UInt64Array};
 
     let df = ctx.sql(sql).await?;
@@ -90,8 +88,11 @@ async fn merge_into_updates_and_inserts() -> Result<(), Box<dyn std::error::Erro
     Dataset::write(reader_src, source_uri.as_str(), None).await?;
 
     // 4. Register directory namespace as my_catalog.default.
-    let ctx = SessionContext::new();
-    register_directory_namespace_as_schema(&ctx, "my_catalog", "default", &root).await?;
+    let ctx = Session::new();
+    let ns = NamespaceConfig::for_directory(&root)
+        .with_catalog("my_catalog")
+        .with_schema("default");
+    ctx.r#use(ns).await?;
 
     // 5. Initial checks: target has 10 rows, source has 10 rows.
     let target_count = count_rows(&ctx, "SELECT COUNT(*) FROM my_catalog.default.foo").await?;
@@ -102,13 +103,12 @@ async fn merge_into_updates_and_inserts() -> Result<(), Box<dyn std::error::Erro
     // 6. Run MERGE INTO:
     //    - WHEN MATCHED: update foo.x = bar.x
     //    - WHEN NOT MATCHED: insert new rows from bar
-    execute_lance_sql(
-        &ctx,
+    ctx.sql(
         "MERGE INTO my_catalog.default.foo AS t \
-         USING my_catalog.default.bar AS s \
-         ON t.id = s.id \
-         WHEN MATCHED THEN UPDATE SET x = s.x \
-         WHEN NOT MATCHED THEN INSERT (id, x) VALUES (s.id, s.x)",
+             USING my_catalog.default.bar AS s \
+             ON t.id = s.id \
+             WHEN MATCHED THEN UPDATE SET x = s.x \
+             WHEN NOT MATCHED THEN INSERT (id, x) VALUES (s.id, s.x)",
     )
     .await?;
 

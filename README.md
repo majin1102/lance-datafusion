@@ -7,7 +7,8 @@ This crate provides a `CatalogProvider` implementation for [Apache DataFusion](h
 - **Namespace as Schema**: Maps a `LanceNamespace` to a DataFusion `SchemaProvider`.
 - **Directory Namespace Support**: Easily register a directory of Lance datasets (e.g., `s3://bucket/data/`, `/path/to/data/`) as a schema.
 - **Dynamic Table Resolution**: Tables are resolved on-the-fly by calling `namespace.describe_table()` to get the dataset URI.
-- **Minimal DML Support**: Includes an entry point `execute_lance_sql` for basic `DELETE`, `UPDATE`, and `MERGE INTO` operations on Lance tables.
+- **Session Wrapper**: Provides a high-level `Session` API that wraps DataFusion's `SessionContext`, manages a `LanceCatalogProviderList`, and exposes a `use()` method to mount namespaces.
+- **Minimal DML Support**: Routes `DELETE`, `UPDATE`, and `MERGE INTO` statements through Lance's custom DML engine when using the `Session::sql` API.
 
 ## Usage
 
@@ -25,29 +26,27 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 ### 2. Registering a Namespace
 
-First, create a `SessionContext`. Then, use the `register_directory_namespace_as_schema` helper to mount a directory as a schema within a named catalog.
+The recommended way to mount namespaces is via the high-level `Session` API. It wraps a DataFusion `SessionContext` and manages a `LanceCatalogProviderList` for you.
 
 Assume you have a directory `/path/to/my_data` containing a Lance dataset at `/path/to/my_data/foo.lance`.
 
 ```rust
-use datafusion::prelude::SessionContext;
-use lance_datafusion_catalog::register::register_directory_namespace_as_schema;
+use lance_datafusion_catalog::{NamespaceConfig, Session};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let ctx = SessionContext::new();
+    // Create a new Lance session with an underlying DataFusion SessionContext.
+    let session = Session::new();
 
-    // Register the directory /path/to/my_data as the schema "default"
-    // under the catalog "my_lance_catalog".
-    register_directory_namespace_as_schema(
-        &ctx,
-        "my_lance_catalog",
-        "default",
-        "/path/to/my_data"
-    ).await?;
+    // Mount the directory /path/to/my_data as the schema "default"
+    // under the default catalog "lance".
+    let ns = NamespaceConfig::for_directory("/path/to/my_data");
+    session.r#use(ns).await?;
 
-    // Now you can query the 'foo' table.
-    let df = ctx.sql("SELECT * FROM my_lance_catalog.default.foo LIMIT 10").await?;
+    // Now you can query the 'foo' table as lance.default.foo.
+    let df = session
+        .sql("SELECT * FROM lance.default.foo LIMIT 10")
+        .await?;
     df.show().await?;
 
     Ok(())
@@ -56,53 +55,54 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### 3. Executing DML (DELETE / UPDATE / MERGE INTO)
 
-This crate provides a separate function `execute_lance_sql` for DML operations. This is an initial implementation and is not a replacement for DataFusion's full DML capabilities.
+When using the `Session` API, DML statements are routed automatically through Lance's custom engine when the SQL text starts with `DELETE`, `UPDATE`, or `MERGE`.
 
 ```rust
-use datafusion::prelude::SessionContext;
-use lance_datafusion_catalog::dml::execute_lance_sql;
-use lance_datafusion_catalog::register::register_directory_namespace_as_schema;
+use lance_datafusion_catalog::{NamespaceConfig, Session};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let ctx = SessionContext::new();
-    register_directory_namespace_as_schema(
-        &ctx,
-        "my_lance_catalog",
-        "default",
-        "/path/to/my_data"
-    ).await?;
+    let session = Session::new();
+    let ns = NamespaceConfig::for_directory("/path/to/my_data");
+    session.r#use(ns).await?;
 
     // Initial count
-    let initial_count = ctx.sql("SELECT COUNT(*) FROM my_lance_catalog.default.foo").await?.collect().await?;
+    let initial_count = session
+        .sql("SELECT COUNT(*) FROM lance.default.foo")
+        .await?
+        .collect()
+        .await?;
     println!("Initial count: {:?}", initial_count);
 
     // Delete some rows
-    execute_lance_sql(
-        &ctx,
-        "DELETE FROM my_lance_catalog.default.foo WHERE x >= 10"
-    ).await?;
+    session
+        .sql("DELETE FROM lance.default.foo WHERE x >= 10")
+        .await?;
 
     // Update some rows
-    execute_lance_sql(
-        &ctx,
-        "UPDATE my_lance_catalog.default.foo SET x = x + 1 WHERE id BETWEEN 5 AND 9"
-    ).await?;
+    session
+        .sql("UPDATE lance.default.foo SET x = x + 1 WHERE id BETWEEN 5 AND 9")
+        .await?;
 
     // Merge from another table (simplified example)
-    execute_lance_sql(
-        &ctx,
-        "MERGE INTO my_lance_catalog.default.foo AS t \
-         USING my_lance_catalog.default.bar AS s \
-         ON t.id = s.id \
-         WHEN MATCHED THEN UPDATE SET x = s.x \
-         WHEN NOT MATCHED THEN INSERT (id, x) VALUES (s.id, s.x)"
-    ).await?;
+    session
+        .sql(
+            "MERGE INTO lance.default.foo AS t \
+             USING lance.default.bar AS s \
+             ON t.id = s.id \
+             WHEN MATCHED THEN UPDATE SET x = s.x \
+             WHEN NOT MATCHED THEN INSERT (id, x) VALUES (s.id, s.x)",
+        )
+        .await?;
 
     // Verify new count
-    let final_count = ctx.sql("SELECT COUNT(*) FROM my_lance_catalog.default.foo").await?.collect().await?;
+    let final_count = session
+        .sql("SELECT COUNT(*) FROM lance.default.foo")
+        .await?
+        .collect()
+        .await?;
     println!("Final count: {:?}", final_count);
-    
+
     Ok(())
 }
 ```

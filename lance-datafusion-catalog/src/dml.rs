@@ -8,8 +8,8 @@ use datafusion_common::TableReference;
 use datafusion_sql::planner::object_name_to_table_reference as df_object_name_to_table_reference;
 use datafusion_sql::sqlparser::{
     ast::{
-        Assignment, AssignmentTarget, Delete, Expr as SQLExpr, FromTable, ObjectName,
-        Statement, TableFactor, TableWithJoins,
+        Assignment, AssignmentTarget, Delete, Expr as SQLExpr, FromTable, ObjectName, Statement,
+        TableFactor, TableWithJoins,
     },
     dialect::GenericDialect,
     parser::Parser,
@@ -67,7 +67,8 @@ pub async fn execute_lance_sql(ctx: &SessionContext, sql: &str) -> DFResult<()> 
                     "execute_lance_sql UPDATE does not yet support RETURNING".to_string(),
                 ));
             }
-            if upper.contains(" ON CONFLICT ") || upper.contains(" OR ROLLBACK ")
+            if upper.contains(" ON CONFLICT ")
+                || upper.contains(" OR ROLLBACK ")
                 || upper.contains(" OR ABORT ")
                 || upper.contains(" OR REPLACE ")
                 || upper.contains(" OR IGNORE ")

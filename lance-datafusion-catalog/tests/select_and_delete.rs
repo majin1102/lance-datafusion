@@ -3,14 +3,12 @@
 use arrow::datatypes::Int32Type;
 use arrow_array::{Int64Array, UInt64Array};
 use datafusion::error::DataFusionError;
-use datafusion::prelude::SessionContext;
 use lance::dataset::Dataset;
-use lance_datafusion_catalog::dml::execute_lance_sql;
-use lance_datafusion_catalog::register::register_directory_namespace_as_schema;
+use lance_datafusion_catalog::{NamespaceConfig, Session};
 use lance_datagen::{self as datagen, BatchCount, RowCount};
 use tempfile::TempDir;
 
-async fn count_rows(ctx: &SessionContext, sql: &str) -> Result<i64, DataFusionError> {
+async fn count_rows(ctx: &Session, sql: &str) -> Result<i64, DataFusionError> {
     let df = ctx.sql(sql).await?;
     let batches = df.collect().await?;
 
@@ -59,16 +57,20 @@ async fn select_and_delete() -> Result<(), Box<dyn std::error::Error>> {
     Dataset::write(reader, table_uri.as_str(), None).await?;
 
     // 2. Register a directory namespace as my_catalog.default in DataFusion.
-    let ctx = SessionContext::new();
-    register_directory_namespace_as_schema(&ctx, "my_catalog", "default", &root).await?;
+    let ctx = Session::new();
+    let ns = NamespaceConfig::for_directory(&root)
+        .with_catalog("my_catalog")
+        .with_schema("default");
+    ctx.r#use(ns).await?;
 
     // 3. Run an initial COUNT(*) query.
     let initial_count =
         count_rows(&ctx, "SELECT COUNT(*) AS cnt FROM my_catalog.default.foo").await?;
     assert_eq!(initial_count, 20);
 
-    // 4. Execute a minimal DELETE via execute_lance_sql.
-    execute_lance_sql(&ctx, "DELETE FROM my_catalog.default.foo WHERE x >= 10").await?;
+    // 4. Execute a minimal DELETE via Session::sql (routed to Lance DML).
+    ctx.sql("DELETE FROM my_catalog.default.foo WHERE x >= 10")
+        .await?;
 
     // 5. Verify the row count has decreased.
     let remaining_count =
