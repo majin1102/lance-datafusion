@@ -56,12 +56,17 @@ where
 pub struct LanceCatalogProviderList {
     /// Root Lance namespace used to resolve catalogs / schemas / tables.
     root: Arc<dyn LanceNamespace>,
+    /// Manually registered catalogs (for example from `SessionBuilder::add_catalog`).
+    manual_catalogs: DashMap<String, Arc<dyn CatalogProvider>>,
 }
 
 impl LanceCatalogProviderList {
     /// Create a new dynamic catalog list backed by the given root namespace.
     pub fn new(root: Arc<dyn LanceNamespace>) -> Self {
-        Self { root }
+        Self {
+            root,
+            manual_catalogs: DashMap::new(),
+        }
     }
 
     /// Return the underlying root namespace.
@@ -77,21 +82,23 @@ impl CatalogProviderList for LanceCatalogProviderList {
 
     fn register_catalog(
         &self,
-        _name: String,
-        _catalog: Arc<dyn CatalogProvider>,
+        name: String,
+        catalog: Arc<dyn CatalogProvider>,
     ) -> Option<Arc<dyn CatalogProvider>> {
-        // This dynamic catalog list is backed directly by a LanceNamespace
-        // hierarchy and does not support manual catalog registration.
-        //
-        // Returning `None` keeps the API surface compatible while signaling
-        // that nothing was stored.
-        None
+        self.manual_catalogs.insert(name, catalog)
     }
 
     fn catalog_names(&self) -> Vec<String> {
+        // Start with manually registered catalogs.
+        let mut names: Vec<String> = self
+            .manual_catalogs
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect();
+
         let root = Arc::clone(&self.root);
 
-        block_on_future(async move {
+        let dynamic = block_on_future(async move {
             let request = ListNamespacesRequest {
                 id: Some(vec![]),
                 page_token: None,
@@ -106,14 +113,26 @@ impl CatalogProviderList for LanceCatalogProviderList {
                 Ok(resp) => resp.namespaces,
                 Err(_) => Vec::new(),
             }
-        })
+        });
+
+        for name in dynamic {
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+
+        names
     }
 
     fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
-        Some(Arc::new(LanceCatalogProvider::new(
-            Arc::clone(&self.root),
-            name.to_string(),
-        )) as Arc<dyn CatalogProvider>)
+        if let Some(entry) = self.manual_catalogs.get(name) {
+            Some(Arc::clone(entry.value()))
+        } else {
+            Some(Arc::new(LanceCatalogProvider::new(
+                Arc::clone(&self.root),
+                name.to_string(),
+            )) as Arc<dyn CatalogProvider>)
+        }
     }
 }
 

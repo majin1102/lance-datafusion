@@ -10,12 +10,12 @@ pub mod dml;
 pub mod error;
 pub mod physical_plan;
 pub mod schema;
-pub mod session;
+pub mod session_builder;
 pub mod table;
 pub mod task_writer;
 
 pub use catalog::{LanceCatalogProvider, LanceCatalogProviderList};
 pub use schema::LanceSchemaProvider;
-pub use session::{Session, SessionBuilder};
+pub use session_builder::SessionBuilder;
 pub use table::lance_static_table_provider::LanceStaticTableProvider;
 pub use table::lance_table_provider::LanceTableProvider;

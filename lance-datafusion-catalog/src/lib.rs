@@ -13,4 +13,3 @@
 //! [`LanceCatalogProviderList`].
 
 pub use lance_integrations_datafusion::*;
-pub use lance_integrations_datafusion::{Session, SessionBuilder};
