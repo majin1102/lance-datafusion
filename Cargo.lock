@@ -3302,6 +3302,7 @@ dependencies = [
  "datafusion-sql",
  "lance",
  "lance-datagen",
+ "lance-integrations-datafusion",
  "lance-namespace",
  "lance-namespace-impls",
  "tempfile",
@@ -3471,6 +3472,29 @@ dependencies = [
  "tracing",
  "twox-hash",
  "uuid",
+]
+
+[[package]]
+name = "lance-integrations-datafusion"
+version = "0.1.0"
+dependencies = [
+ "arrow",
+ "arrow-array",
+ "arrow-schema",
+ "async-trait",
+ "dashmap",
+ "datafusion",
+ "datafusion-catalog",
+ "datafusion-common",
+ "datafusion-session",
+ "datafusion-sql",
+ "futures",
+ "lance",
+ "lance-datagen",
+ "lance-namespace",
+ "lance-namespace-impls",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

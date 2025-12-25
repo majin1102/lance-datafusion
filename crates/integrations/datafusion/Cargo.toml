@@ -1,22 +1,18 @@
 [package]
-name = "lance-datafusion-catalog"
+name = "lance-integrations-datafusion"
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
-description = "DataFusion CatalogProvider integration for Lance using lance-namespace."
-readme = "README.md"
+description = "Lance DataFusion integration (Iceberg-style modular layout)"
 
 [features]
 default = []
 rest = []
 
-
 [dependencies]
 async-trait = "0.1"
 dashmap = "6"
-
-# New Iceberg-style integration crate
-lance-integrations-datafusion = { path = "../crates/integrations/datafusion" }
+futures = "0.3"
 
 # DataFusion and related crates (must match Lance's pinned version)
 datafusion = "50.0.0"
@@ -33,11 +29,12 @@ lance-namespace-impls = { git = "https://github.com/lance-format/lance", package
 # Async runtime
 tokio = { version = "1.23", features = ["macros", "rt-multi-thread"] }
 
-[dev-dependencies]
-# Test helpers
+# Arrow for RecordBatchIterator in DML / tests
 arrow = "56.1"
 arrow-array = "56.1"
 arrow-schema = "56.1"
 
+[dev-dependencies]
+# Test helpers
 lance-datagen = { git = "https://github.com/lance-format/lance", package = "lance-datagen", tag = "v2.0.0-beta.4" }
 tempfile = "3"

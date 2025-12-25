@@ -55,7 +55,7 @@ pub(crate) async fn register_directory_namespace_as_schema(
 
     let namespace: Arc<dyn LanceNamespace> = Arc::new(namespace);
 
-    let catalog = Arc::new(LanceCatalogProvider::new());
+    let mut catalog = LanceCatalogProvider::new();
     catalog
         .register_namespace(schema_name.to_string(), namespace)
         .map_err(|e| {
@@ -65,6 +65,7 @@ pub(crate) async fn register_directory_namespace_as_schema(
             ))
         })?;
 
+    let catalog = Arc::new(catalog);
     ctx.register_catalog(catalog_name.to_string(), catalog);
 
     Ok(())
