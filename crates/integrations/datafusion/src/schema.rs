@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Lance SchemaProvider backed by a [`LanceNamespace`].
-//!
-//! This mirrors `IcebergSchemaProvider` in `iceberg-datafusion` but uses
-//! Lance namespaces and datasets.
 
 use std::any::Any;
 use std::collections::HashMap;
@@ -147,10 +144,6 @@ impl SchemaProvider for LanceSchemaProvider {
         self.tables.keys().cloned().collect()
     }
 
-    fn table_exist(&self, name: &str) -> bool {
-        self.tables.contains_key(name)
-    }
-
     async fn table(&self, name: &str) -> DFResult<Option<Arc<dyn TableProvider>>> {
         if let Some(provider) = self.tables.get(name) {
             return Ok(Some(provider.clone()));
@@ -164,5 +157,9 @@ impl SchemaProvider for LanceSchemaProvider {
         } else {
             Ok(None)
         }
+    }
+
+    fn table_exist(&self, name: &str) -> bool {
+        self.tables.contains_key(name)
     }
 }

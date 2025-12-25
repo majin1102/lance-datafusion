@@ -62,16 +62,20 @@ impl LanceTableScan {
 }
 
 impl ExecutionPlan for LanceTableScan {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "LanceTableScan"
     }
 
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     fn schema(&self) -> ArrowSchemaRef {
         self.schema.clone()
+    }
+
+    fn properties(&self) -> &PlanProperties {
+        &self.plan_properties
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -83,10 +87,6 @@ impl ExecutionPlan for LanceTableScan {
         _children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
         Ok(self)
-    }
-
-    fn properties(&self) -> &PlanProperties {
-        &self.plan_properties
     }
 
     fn execute(
@@ -140,8 +140,6 @@ async fn get_batch_stream(
     filters: Vec<Expr>,
     limit: Option<usize>,
 ) -> DFResult<Pin<Box<dyn Stream<Item = DFResult<RecordBatch>> + Send>>> {
-    use datafusion::arrow::record_batch::RecordBatchReader;
-
     let mut scanner = dataset.scan();
 
     if let Some(cols) = projection {

@@ -1,5 +1,0 @@
-// SPDX-License-Identifier: Apache-2.0
-
-//! Deprecated: use `lance_integrations_datafusion::LanceCatalogProvider` instead.
-
-pub use lance_integrations_datafusion::LanceCatalogProvider;
