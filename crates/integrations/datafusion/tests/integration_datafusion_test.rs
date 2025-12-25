@@ -4,18 +4,15 @@ use std::sync::Arc;
 
 use arrow_array::{Int32Array, Int64Array, RecordBatch, RecordBatchIterator, UInt64Array};
 use arrow_schema::{DataType, Field, Schema};
-use datafusion::catalog::CatalogProvider;
 use datafusion::error::DataFusionError;
-use datafusion::prelude::SessionContext;
 use lance::dataset::Dataset;
-use lance_integrations_datafusion::dml::execute_lance_sql;
-use lance_integrations_datafusion::{LanceCatalogProvider, LanceSchemaProvider};
+use lance_integrations_datafusion::{Session, SessionBuilder};
 use lance_namespace::LanceNamespace;
 use lance_namespace_impls::DirectoryNamespaceBuilder;
 use tempfile::TempDir;
 
-async fn count_rows(ctx: &SessionContext, sql: &str) -> Result<i64, DataFusionError> {
-    let df = ctx.sql(sql).await?;
+async fn count_rows(session: &Session, sql: &str) -> Result<i64, DataFusionError> {
+    let df = session.sql(sql).await?;
     let batches = df.collect().await?;
 
     if batches.is_empty() {
@@ -90,60 +87,46 @@ async fn integration_select_insert_update_merge() -> Result<(), Box<dyn std::err
     let reader_bar = RecordBatchIterator::new(vec![Ok(batch_bar)].into_iter(), schema.clone());
     Dataset::write(reader_bar, bar_uri.as_str(), None).await?;
 
-    // 2. Build a DirectoryNamespace and register it as lance.default.
+    // 2. Build a DirectoryNamespace and attach it via SessionBuilder.
     let namespace_impl = DirectoryNamespaceBuilder::new(&root).build().await?;
     let namespace: Arc<dyn LanceNamespace> = Arc::new(namespace_impl);
 
-    let schema_provider = LanceSchemaProvider::new(namespace);
-    let schema_provider: Arc<dyn datafusion::catalog::SchemaProvider> = Arc::new(schema_provider);
-
-    let mut catalog = LanceCatalogProvider::new();
-    catalog
-        .register_schema_provider("default", schema_provider)
-        .unwrap();
-    let catalog_arc: Arc<dyn CatalogProvider> = Arc::new(catalog);
-
-    let ctx = SessionContext::new();
-    ctx.register_catalog("lance", catalog_arc);
+    let session = SessionBuilder::new().with_root_namespace(namespace).build();
 
     // 3. SELECT COUNT(*) from lance.default.foo.
-    let initial_count = count_rows(&ctx, "SELECT COUNT(*) FROM lance.default.foo").await?;
+    let initial_count = count_rows(&session, "SELECT COUNT(*) FROM lance.default.foo").await?;
     assert_eq!(initial_count, 10);
 
-    // 4. INSERT INTO foo FROM bar using custom Lance DML.
-    execute_lance_sql(
-        &ctx,
-        "INSERT INTO lance.default.foo SELECT id, x FROM lance.default.bar",
-    )
-    .await?;
+    // 4. INSERT INTO foo FROM bar using custom Lance DML routed via Session::sql.
+    session
+        .sql("INSERT INTO lance.default.foo SELECT id, x FROM lance.default.bar")
+        .await?;
 
-    let after_insert = count_rows(&ctx, "SELECT COUNT(*) FROM lance.default.foo").await?;
+    let after_insert = count_rows(&session, "SELECT COUNT(*) FROM lance.default.foo").await?;
     println!("DEBUG after INSERT: rows = {}", after_insert);
     assert_eq!(after_insert, 15);
 
     // 5. UPDATE: increment x where id BETWEEN 5 AND 9.
-    execute_lance_sql(
-        &ctx,
-        "UPDATE lance.default.foo SET x = x + 1 WHERE id BETWEEN 5 AND 9",
-    )
-    .await?;
+    session
+        .sql("UPDATE lance.default.foo SET x = x + 1 WHERE id BETWEEN 5 AND 9")
+        .await?;
 
     // 6. MERGE: upsert from bar into foo on id.
-    execute_lance_sql(
-        &ctx,
-        "MERGE INTO lance.default.foo AS t \
+    session
+        .sql(
+            "MERGE INTO lance.default.foo AS t \
              USING lance.default.bar AS s \
              ON t.id = s.id \
              WHEN MATCHED THEN UPDATE SET x = s.x \
              WHEN NOT MATCHED THEN INSERT (id, x) VALUES (s.id, s.x)",
-    )
-    .await?;
+        )
+        .await?;
 
-    let final_count = count_rows(&ctx, "SELECT COUNT(*) FROM lance.default.foo").await?;
+    let final_count = count_rows(&session, "SELECT COUNT(*) FROM lance.default.foo").await?;
     assert_eq!(final_count, 15);
 
     // Spot-check values for a few ids.
-    let df = ctx
+    let df = session
         .sql("SELECT id, x FROM lance.default.foo ORDER BY id")
         .await?;
     let batches = df.collect().await?;

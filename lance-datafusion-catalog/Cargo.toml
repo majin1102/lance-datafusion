@@ -1,0 +1,17 @@
+[package]
+name = "lance-datafusion-catalog"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "High-level Session wrapper around Lance DataFusion integration"
+
+[dependencies]
+datafusion = "50.0.0"
+datafusion-common = "50.0.0"
+
+lance-integrations-datafusion = { path = "../crates/integrations/datafusion" }
+
+lance-namespace = { git = "https://github.com/lance-format/lance", package = "lance-namespace", tag = "v2.0.0-beta.4" }
+
+# Async runtime
+ tokio = { version = "1.23", features = ["macros", "rt-multi-thread"] }

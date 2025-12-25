@@ -3290,22 +3290,10 @@ dependencies = [
 name = "lance-datafusion-catalog"
 version = "0.1.0"
 dependencies = [
- "arrow",
- "arrow-array",
- "arrow-schema",
- "async-trait",
- "dashmap",
  "datafusion",
- "datafusion-catalog",
  "datafusion-common",
- "datafusion-session",
- "datafusion-sql",
- "lance",
- "lance-datagen",
  "lance-integrations-datafusion",
  "lance-namespace",
- "lance-namespace-impls",
- "tempfile",
  "tokio",
 ]
 
