@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! High-level Session wrapper for the Lance DataFusion integration.
+//! Facade crate for the Lance DataFusion integration.
 //!
-//! This crate re-exports the lower-level `lance-integrations-datafusion`
-//! types and adds a convenient [`Session`] API that wraps
-//! [`datafusion::execution::context::SessionContext`].
+//! This crate simply re-exports the lower-level
+//! `lance-integrations-datafusion` crate so existing code can continue
+//! to depend on the `lance-datafusion-catalog` crate name without
+//! changes.
 //!
-//! The [`SessionBuilder`] allows configuring the underlying
-//! `SessionContext`, in particular by attaching a root
-//! [`lance_namespace::LanceNamespace`] that is exposed as a dynamic
-//! catalog hierarchy (catalog / schema / table) using
-//! [`LanceCatalogProviderList`].
+//! New code is encouraged to use the types in `lance-integrations-datafusion`
+//! directly, such as [`SessionBuilder`] and the dynamic catalog / schema
+//! providers.
 
 pub use lance_integrations_datafusion::*;

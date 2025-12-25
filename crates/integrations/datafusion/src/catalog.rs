@@ -2,30 +2,25 @@
 
 //! Lance `CatalogProvider` implementations.
 //!
-//! This module provides two flavors of catalog providers:
+//! This module provides dynamic catalog providers backed by a
+//! [`LanceNamespace`] tree.
 //!
 //! - [`LanceCatalogProviderList`] / [`LanceCatalogProvider`]:
 //!   fully dynamic providers backed directly by a [`LanceNamespace`] tree.
 //!   Catalog and schema names are resolved on demand via `list_namespaces`,
 //!   and no schemas are cached in memory.
-//!
-//! - [`LanceLegacyCatalogProvider`]:
-//!   a simple in-memory catalog that stores user-registered
-//!   [`SchemaProvider`]s. This is kept mainly for backwards compatibility
-//!   and ad-hoc usage; new code should prefer the dynamic providers above.
 
 use std::any::Any;
 use std::sync::Arc;
 
 use dashmap::DashMap;
 use datafusion::catalog::{CatalogProvider, CatalogProviderList, SchemaProvider};
-use datafusion_common::Result as DFResult;
 use futures::executor as futures_executor;
 use lance_namespace::models::ListNamespacesRequest;
 use lance_namespace::LanceNamespace;
 
 use crate::error::to_datafusion_error;
-use crate::schema::{LanceLegacySchemaProvider, LanceSchemaProvider};
+use crate::schema::LanceSchemaProvider;
 
 // ---------------------------------------------------------------------------
 // Helper: bridge async namespace calls into synchronous catalog APIs
@@ -189,84 +184,4 @@ impl CatalogProvider for LanceCatalogProvider {
 
     // For dynamic providers, schema registration is not supported and we
     // fall back to the default `not_impl_err!` behavior from DataFusion.
-}
-
-// ---------------------------------------------------------------------------
-// Legacy in-memory catalog (schema map + registration helpers)
-// ---------------------------------------------------------------------------
-
-/// Legacy in-memory catalog provider that stores schemas in a map.
-///
-/// This implementation keeps an in-memory map of schema providers and is kept
-/// mainly for backwards compatibility and ad-hoc usage. New code should
-/// prefer [`LanceCatalogProviderList`] / [`LanceCatalogProvider`] for fully
-/// dynamic namespace-backed catalogs.
-#[derive(Debug, Default)]
-#[deprecated(
-    note = "LanceLegacyCatalogProvider is kept for compatibility; prefer LanceCatalogProviderList backed by a LanceNamespace"
-)]
-pub struct LanceLegacyCatalogProvider {
-    /// Mapping from schema name to DataFusion schema provider.
-    schemas: DashMap<String, Arc<dyn SchemaProvider>>,
-}
-
-impl LanceLegacyCatalogProvider {
-    /// Create an empty catalog provider.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Register a pre-built [`SchemaProvider`] under the given name.
-    #[deprecated(
-        note = "LanceLegacyCatalogProvider is kept for compatibility; prefer dynamic providers backed by LanceNamespace"
-    )]
-    pub fn register_schema_provider(
-        &self,
-        name: impl Into<String>,
-        schema: Arc<dyn SchemaProvider>,
-    ) -> DFResult<Option<Arc<dyn SchemaProvider>>> {
-        Ok(self.schemas.insert(name.into(), schema))
-    }
-
-    /// Convenience helper to register a [`LanceNamespace`] as a schema.
-    #[deprecated(
-        note = "register_namespace is deprecated; prefer using LanceCatalogProviderList with a root LanceNamespace"
-    )]
-    pub fn register_namespace(
-        &self,
-        schema_name: impl Into<String>,
-        namespace: Arc<dyn LanceNamespace>,
-    ) -> DFResult<Option<Arc<dyn SchemaProvider>>> {
-        let schema_name = schema_name.into();
-        let provider =
-            Arc::new(LanceLegacySchemaProvider::new(namespace)) as Arc<dyn SchemaProvider>;
-        self.register_schema_provider(schema_name, provider)
-    }
-}
-
-impl CatalogProvider for LanceLegacyCatalogProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn schema_names(&self) -> Vec<String> {
-        self.schemas
-            .iter()
-            .map(|entry| entry.key().clone())
-            .collect()
-    }
-
-    fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
-        self.schemas
-            .get(name)
-            .map(|entry| Arc::clone(entry.value()))
-    }
-
-    fn register_schema(
-        &self,
-        name: &str,
-        schema: Arc<dyn SchemaProvider>,
-    ) -> datafusion_common::Result<Option<Arc<dyn SchemaProvider>>> {
-        Ok(self.schemas.insert(name.to_string(), schema))
-    }
 }
