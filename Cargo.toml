@@ -15,7 +15,7 @@ dashmap = "6"
 futures = "0.3"
 
 # DataFusion and related crates (must match Lance's pinned version)
-datafusion = { version = "50.0.0" }
+datafusion = { version = "50.3.0" }
 
 # Lance core crates from git (tagged to v2.0.0-beta.4)
 lance = { git = "https://github.com/lance-format/lance", package = "lance", tag = "v2.0.0-beta.4", default-features = false, features = ["protoc"] }

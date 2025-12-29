@@ -137,11 +137,10 @@ async fn write_table(
 ) -> DFResult<()> {
     let full_path = dir.path().join(file_name);
     if let Some(parent) = full_path.parent() {
-        std::fs::create_dir_all(parent).unwrap();
+        std::fs::create_dir_all(parent)?;
     }
 
     let uri = full_path.to_str().unwrap().to_string();
-
     let reader = RecordBatchIterator::new(vec![Ok(batch)], schema);
     let write_params = WriteParams {
         mode: WriteMode::Create,
@@ -156,8 +155,8 @@ async fn write_table(
 }
 
 async fn setup_test_context() -> DFResult<NamespaceTestContext> {
-    let root_dir = TempDir::new().unwrap();
-    let extra_dir = TempDir::new().unwrap();
+    let root_dir = TempDir::new()?;
+    let extra_dir = TempDir::new()?;
 
     let (customers_schema, customers_batch) = customers_data();
     write_table(

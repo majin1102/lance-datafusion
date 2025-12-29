@@ -8,7 +8,7 @@
 pub mod catalog;
 pub mod dml;
 pub mod error;
-mod namespace;
+pub mod namespace;
 pub mod physical_plan;
 pub mod schema;
 pub mod session_builder;
