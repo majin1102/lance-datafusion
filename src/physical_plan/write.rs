@@ -5,7 +5,7 @@
 //! This plan is used by `LazyLanceTableProvider::insert_into` to route
 //! `INSERT INTO` statements through a pure DataFusion physical plan:
 //!
-//!     upstream plan --> LanceInsertExec --> count(*) result
+//! upstream plan --> LanceInsertExec --> count(*) result
 //!
 //! The actual data write is delegated to Lance's low-level insert
 //! builder (`lance::dataset::InsertBuilder`), which in turn uses the

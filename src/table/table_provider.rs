@@ -82,7 +82,14 @@ impl TableProvider for LanceTableProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let scan = LanceTableScan::new(self.dataset.clone(), self.schema.clone(), projection, filters, limit);
+        let scan = LanceTableScan::try_new(
+            self.dataset.clone(),
+            self.schema.clone(),
+            projection,
+            filters,
+            limit,
+        )
+        .await?;
         Ok(Arc::new(scan))
     }
 

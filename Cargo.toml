@@ -18,7 +18,7 @@ futures = "0.3"
 datafusion = { version = "50.0.0" }
 
 # Lance core crates from git (tagged to v2.0.0-beta.4)
-lance = { git = "https://github.com/lance-format/lance", package = "lance", tag = "v2.0.0-beta.4", default-features = false }
+lance = { git = "https://github.com/lance-format/lance", package = "lance", tag = "v2.0.0-beta.4", default-features = false, features = ["protoc"] }
 lance-namespace = { git = "https://github.com/lance-format/lance", package = "lance-namespace", tag = "v2.0.0-beta.4" }
 lance-namespace-impls = { git = "https://github.com/lance-format/lance", package = "lance-namespace-impls", tag = "v2.0.0-beta.4" }
 
