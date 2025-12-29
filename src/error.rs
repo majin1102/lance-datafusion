@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use datafusion::error::{DataFusionError, Result as DFResult};
+use datafusion::error::{DataFusionError, Result};
 
 /// Convert a Lance error into a DataFusion error.
 ///
@@ -11,6 +11,6 @@ pub fn to_datafusion_error<E: std::fmt::Display>(err: E) -> DataFusionError {
 }
 
 /// Convenience helper for wrapping fallible operations.
-pub fn df_result<T, E: std::fmt::Display>(res: Result<T, E>) -> DFResult<T> {
+pub fn df_result<T, E: std::fmt::Display>(res: Result<T, E>) -> Result<T> {
     res.map_err(to_datafusion_error)
 }

@@ -15,9 +15,9 @@ use datafusion_sql::sqlparser::{
     dialect::GenericDialect,
 };
 use datafusion_sql::TableReference;
-use lance::datafusion::LanceTableProvider;
 use lance::dataset::{Dataset, MergeInsertBuilder, UpdateBuilder, WhenMatched, WhenNotMatched};
 use std::sync::Arc;
+use crate::table::table_provider::LanceTableProvider;
 
 /// Execute a minimal subset of DML against Lance tables.
 ///
@@ -182,18 +182,10 @@ async fn execute_lance_delete(
             )
         })?;
 
-    let uri = lance_provider.uri().to_string();
-
-    // Re-open the dataset so we can call `delete`.
-    let mut dataset = Dataset::open(&uri).await.map_err(|e| {
-        DataFusionError::Execution(format!(
-            "Failed to open Lance dataset for DELETE at '{}': {}",
-            uri, e
-        ))
-    })?;
+    let mut dataset = lance_provider.dataset().clone();
 
     dataset.delete(&predicate).await.map_err(|e| {
-        DataFusionError::Execution(format!("Lance delete failed on '{}': {}", uri, e))
+        DataFusionError::Execution(format!("Lance delete failed on '{}': {}", dataset.uri(), e))
     })?;
 
     // After the delete completes, future table lookups will open the latest
@@ -288,16 +280,10 @@ async fn execute_lance_update(
             )
         })?;
 
-    let uri = lance_provider.uri().to_string();
 
-    let dataset = Arc::new(Dataset::open(&uri).await.map_err(|e| {
-        DataFusionError::Execution(format!(
-            "Failed to open Lance dataset for UPDATE at '{}': {}",
-            uri, e
-        ))
-    })?);
-
-    let mut builder = UpdateBuilder::new(dataset);
+    let uri = lance_provider.dataset().uri();
+    let dataset = lance_provider.dataset().clone();
+    let mut builder = UpdateBuilder::new(Arc::new(dataset));
 
     if let Some(expr) = selection {
         let predicate = expr.to_string();
@@ -349,15 +335,8 @@ async fn execute_lance_merge(ctx: &SessionContext, sql: &str) -> Result<()> {
             )
         })?;
 
-    let uri = lance_provider.uri().to_string();
-
-    let dataset = Arc::new(Dataset::open(&uri).await.map_err(|e| {
-        DataFusionError::Execution(format!(
-            "Failed to open Lance dataset for MERGE at '{}': {}",
-            uri, e
-        ))
-    })?);
-
+    let uri = lance_provider.dataset().uri();
+    let dataset = lance_provider.dataset().clone();
     // Build source stream by querying the source table through DataFusion
     let source_df = ctx.table(source_ref.clone()).await?;
     let source_stream = source_df.execute_stream().await.map_err(|e| {
@@ -366,7 +345,7 @@ async fn execute_lance_merge(ctx: &SessionContext, sql: &str) -> Result<()> {
 
     // Configure MergeInsert as upsert: update all matching rows and insert non-matching rows
     let mut builder =
-        MergeInsertBuilder::try_new(dataset.clone(), vec![on_key.clone()]).map_err(|e| {
+        MergeInsertBuilder::try_new(Arc::new(dataset), vec![on_key.clone()]).map_err(|e| {
             DataFusionError::Execution(format!(
                 "Failed to create MergeInsertBuilder for MERGE on '{}': {}",
                 uri, e
@@ -574,14 +553,8 @@ async fn handle_insert(ctx: &SessionContext, insert: Insert) -> Result<()> {
             )
         })?;
 
-    let uri = lance_provider.uri().to_string();
-
-    let mut dataset = Dataset::open(&uri).await.map_err(|e| {
-        DataFusionError::Execution(format!(
-            "Failed to open Lance dataset for INSERT at '{}': {}",
-            uri, e
-        ))
-    })?;
+    let uri = lance_provider.dataset().uri();
+    let mut dataset = lance_provider.dataset().clone();
 
     dataset.append(reader, None).await.map_err(|e| {
         DataFusionError::Execution(format!("Lance INSERT append failed on '{}': {}", uri, e))

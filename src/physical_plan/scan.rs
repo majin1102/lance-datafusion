@@ -23,7 +23,7 @@ use crate::error::to_datafusion_error;
 /// Simple scan node that reads from a Lance dataset using its `Scanner` API.
 #[derive(Debug)]
 pub struct LanceTableScan {
-    dataset: Dataset,
+    dataset: Arc<Dataset>,
     schema: ArrowSchemaRef,
     projection: Option<Vec<usize>>,
     filters: Vec<Expr>,
@@ -33,7 +33,7 @@ pub struct LanceTableScan {
 
 impl LanceTableScan {
     pub fn new(
-        dataset: Dataset,
+        dataset: Arc<Dataset>,
         schema: ArrowSchemaRef,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
@@ -134,7 +134,7 @@ impl DisplayAs for LanceTableScan {
 }
 
 async fn get_batch_stream(
-    dataset: Dataset,
+    dataset: Arc<Dataset>,
     schema: ArrowSchemaRef,
     projection: Option<Vec<usize>>,
     filters: Vec<Expr>,

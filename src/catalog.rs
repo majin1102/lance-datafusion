@@ -17,7 +17,6 @@ use std::sync::Arc;
 use dashmap::DashMap;
 use datafusion::catalog::{CatalogProvider, CatalogProviderList, SchemaProvider};
 use datafusion::error::Result;
-use lance_namespace::LanceNamespace;
 
 use crate::namespace::Namespace;
 use crate::schema::LanceSchemaProvider;
@@ -95,7 +94,7 @@ impl LanceCatalogProvider {
         let schemas = DashMap::new();
         for child_namespace in namespace.children().await?.into_iter() {
             let schema_name = child_namespace.name().to_string();
-            let schema_provider = Arc::new(LanceSchemaProvider::from(child_namespace).await?);
+            let schema_provider = Arc::new(LanceSchemaProvider::try_new(child_namespace).await?);
             schemas.insert(schema_name, schema_provider as Arc<dyn SchemaProvider>);
         }
 

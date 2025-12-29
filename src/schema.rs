@@ -9,18 +9,17 @@
 //!   `table` goes back to the namespace.
 
 use std::any::Any;
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use dashmap::DashMap;
 use datafusion::catalog::SchemaProvider;
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
-use lance::datafusion::LanceTableProvider;
-use lance_namespace::LanceNamespace;
 
 use crate::error::to_datafusion_error;
 use crate::namespace::Namespace;
+use crate::table::table_provider::LanceTableProvider;
 
 /// Dynamic [`SchemaProvider`] backed directly by a [`LanceNamespace`].
 ///
@@ -31,19 +30,32 @@ use crate::namespace::Namespace;
 #[derive(Debug, Clone)]
 pub struct LanceSchemaProvider {
     namespace: Namespace,
-    tables: HashSet<String>,
+    tables: DashMap<String, Arc<LanceTableProvider>>,
 }
 
 impl LanceSchemaProvider {
-    pub async fn from(namespace: Namespace) -> Result<Self> {
-        let tables = namespace.tables().await?.into_iter().collect();
-        Ok(Self { namespace, tables })
+    pub async fn try_new(namespace: Namespace) -> Result<Self> {
+        Ok(Self {
+            namespace,
+            tables: DashMap::new(),
+        })
     }
 
     fn table_id(&self, table: &str) -> Vec<String> {
         let mut id = self.namespace.id();
         id.push(table.to_string());
         id
+    }
+
+    async fn load_and_cache_table(&self, table_name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
+        let dataset = self
+            .namespace
+            .load_dataset(table_name)
+            .await
+            .map_err(to_datafusion_error)?;
+        let table_provider= Arc::new(LanceTableProvider::new(dataset));
+        self.tables.insert(table_name.to_string(), table_provider.clone());
+        Ok(Some(table_provider as Arc<dyn TableProvider>))
     }
 }
 
@@ -54,23 +66,23 @@ impl SchemaProvider for LanceSchemaProvider {
     }
 
     fn table_names(&self) -> Vec<String> {
-        self.tables.iter().map(|s| s.to_string()).collect()
+        self.tables.iter().map(|entry| entry.key().clone()).collect()
     }
 
     async fn table(&self, table_name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
-        let dataset = self
-            .namespace
-            .load_dataset(table_name)
-            .await
-            .map_err(to_datafusion_error)?;
-        Ok(Some(Arc::new(LanceTableProvider::new(
-            Arc::new(dataset),
-            true,
-            true,
-        ))))
+        if let Some(table_provider) = self.tables.get(table_name) {
+            if table_provider.is_stale().await? {
+                self.tables.remove(table_name);
+                self.load_and_cache_table(table_name).await
+            } else {
+                Ok(Some(table_provider.clone()))
+            }
+        } else {
+            self.load_and_cache_table(table_name).await
+        }
     }
 
     fn table_exist(&self, name: &str) -> bool {
-        self.tables.contains(name)
+        self.tables.contains_key(name)
     }
 }
