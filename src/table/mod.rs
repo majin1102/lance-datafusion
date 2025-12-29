@@ -6,5 +6,4 @@
 //! catalog-backed and static table providers on top of Lance datasets.
 
 pub mod lance_static_table_provider;
-pub mod lance_table_provider;
 pub mod table_provider_factory;

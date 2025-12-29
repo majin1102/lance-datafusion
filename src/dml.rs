@@ -1,22 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::Arc;
-
-use datafusion::error::{DataFusionError, Result as DFResult};
+use arrow_array::RecordBatchIterator;
+use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionContext;
-use datafusion_common::TableReference;
-use datafusion_sql::planner::object_name_to_table_reference as df_object_name_to_table_reference;
+use datafusion::logical_expr::sqlparser::ast::Insert;
+use datafusion_sql::planner::object_name_to_table_reference;
+use datafusion_sql::sqlparser::ast::TableObject;
+use datafusion_sql::sqlparser::parser::Parser;
 use datafusion_sql::sqlparser::{
     ast::{
-        Assignment, AssignmentTarget, Delete, Expr as SQLExpr, FromTable, Insert, ObjectName,
-        Statement, TableFactor, TableObject, TableWithJoins,
+        Assignment, AssignmentTarget, Delete, Expr as SQLExpr, FromTable, ObjectName, Statement,
+        TableFactor, TableWithJoins,
     },
     dialect::GenericDialect,
-    parser::Parser,
 };
+use datafusion_sql::TableReference;
+use lance::datafusion::LanceTableProvider;
 use lance::dataset::{Dataset, MergeInsertBuilder, UpdateBuilder, WhenMatched, WhenNotMatched};
-
-use crate::table::lance_table_provider::LanceTableProvider;
+use std::sync::Arc;
 
 /// Execute a minimal subset of DML against Lance tables.
 ///
@@ -32,7 +33,7 @@ use crate::table::lance_table_provider::LanceTableProvider;
 /// For UPDATE / MERGE, expressions are forwarded to Lance's update / merge
 /// engines and are subject to their own expression support. Unsupported forms
 /// will return `DataFusionError::NotImplemented` or `DataFusionError::Execution`.
-pub async fn execute_lance_sql(ctx: &SessionContext, sql: &str) -> DFResult<()> {
+pub async fn execute_sql(ctx: &SessionContext, sql: &str) -> Result<()> {
     let dialect = GenericDialect {};
     let mut statements = Parser::parse_sql(&dialect, sql).map_err(|e| {
         DataFusionError::Execution(format!("Failed to parse SQL in execute_lance_sql: {e}"))
@@ -111,7 +112,7 @@ fn is_merge_statement(sql: &str) -> bool {
 // DELETE
 // ---------------------------------------------------------------------------
 
-async fn handle_delete(ctx: &SessionContext, delete: Delete) -> DFResult<()> {
+async fn handle_delete(ctx: &SessionContext, delete: Delete) -> Result<()> {
     // Only support the simplest form of DELETE for now.
     if !delete.tables.is_empty()
         || delete.using.is_some()
@@ -126,7 +127,7 @@ async fn handle_delete(ctx: &SessionContext, delete: Delete) -> DFResult<()> {
 
     let table_name = simple_delete_target(delete.from)?;
     let enable_normalization = ctx.enable_ident_normalization();
-    let table_ref = df_object_name_to_table_reference(table_name, enable_normalization)?;
+    let table_ref = object_name_to_table_reference(table_name, enable_normalization)?;
 
     let predicate = match delete.selection {
         Some(expr) => expr.to_string(),
@@ -136,7 +137,7 @@ async fn handle_delete(ctx: &SessionContext, delete: Delete) -> DFResult<()> {
     execute_lance_delete(ctx, table_ref, predicate).await
 }
 
-fn simple_delete_target(from: FromTable) -> DFResult<ObjectName> {
+fn simple_delete_target(from: FromTable) -> Result<ObjectName> {
     let mut from_vec = match from {
         FromTable::WithFromKeyword(v) => v,
         FromTable::WithoutKeyword(v) => v,
@@ -168,7 +169,7 @@ async fn execute_lance_delete(
     ctx: &SessionContext,
     table_ref: TableReference,
     predicate: String,
-) -> DFResult<()> {
+) -> Result<()> {
     // Resolve the table provider for the given reference.
     let provider = ctx.table_provider(table_ref.clone()).await?;
 
@@ -211,17 +212,17 @@ async fn handle_update(
     table: TableWithJoins,
     assignments: &[Assignment],
     selection: Option<SQLExpr>,
-) -> DFResult<()> {
+) -> Result<()> {
     let enable_normalization = ctx.enable_ident_normalization();
     let table_name = simple_update_target(&table)?;
-    let table_ref = df_object_name_to_table_reference(table_name, enable_normalization)?;
+    let table_ref = object_name_to_table_reference(table_name, enable_normalization)?;
 
     let assignments = collect_update_assignments(assignments)?;
 
     execute_lance_update(ctx, table_ref, assignments, selection).await
 }
 
-fn simple_update_target(table: &TableWithJoins) -> DFResult<ObjectName> {
+fn simple_update_target(table: &TableWithJoins) -> Result<ObjectName> {
     if !table.joins.is_empty() {
         return Err(DataFusionError::NotImplemented(
             "execute_lance_sql UPDATE does not support joins".to_string(),
@@ -237,7 +238,7 @@ fn simple_update_target(table: &TableWithJoins) -> DFResult<ObjectName> {
     }
 }
 
-fn collect_update_assignments(assignments: &[Assignment]) -> DFResult<Vec<(String, String)>> {
+fn collect_update_assignments(assignments: &[Assignment]) -> Result<Vec<(String, String)>> {
     let mut result = Vec::with_capacity(assignments.len());
 
     for assign in assignments {
@@ -275,7 +276,7 @@ async fn execute_lance_update(
     table_ref: TableReference,
     assignments: Vec<(String, String)>,
     selection: Option<SQLExpr>,
-) -> DFResult<()> {
+) -> Result<()> {
     let provider = ctx.table_provider(table_ref.clone()).await?;
 
     let lance_provider = provider
@@ -332,7 +333,7 @@ async fn execute_lance_update(
 // MERGE (upsert-style via MergeInsertBuilder)
 // ---------------------------------------------------------------------------
 
-async fn execute_lance_merge(ctx: &SessionContext, sql: &str) -> DFResult<()> {
+async fn execute_lance_merge(ctx: &SessionContext, sql: &str) -> Result<()> {
     let enable_normalization = ctx.enable_ident_normalization();
     let (target_ref, source_ref, on_key) = parse_merge_components(sql, enable_normalization)?;
 
@@ -394,7 +395,7 @@ async fn execute_lance_merge(ctx: &SessionContext, sql: &str) -> DFResult<()> {
 fn parse_merge_components(
     sql: &str,
     enable_ident_normalization: bool,
-) -> DFResult<(TableReference, TableReference, String)> {
+) -> Result<(TableReference, TableReference, String)> {
     // Flatten newlines to simplify parsing while keeping original casing.
     let sql = sql.replace('\n', " ").replace('\r', " ");
     let sql = sql.trim_end_matches(';').trim();
@@ -444,7 +445,7 @@ fn parse_merge_components(
     Ok((target_ref, source_ref, on_key))
 }
 
-fn parse_table_ref(part: &str, _enable_ident_normalization: bool) -> DFResult<TableReference> {
+fn parse_table_ref(part: &str, _enable_ident_normalization: bool) -> Result<TableReference> {
     // Take the first token before any alias / keywords.
     let token = part.split_whitespace().next().ok_or_else(|| {
         DataFusionError::Execution(format!("Failed to parse table reference from '{}'", part))
@@ -454,7 +455,7 @@ fn parse_table_ref(part: &str, _enable_ident_normalization: bool) -> DFResult<Ta
     Ok(TableReference::parse_str(token))
 }
 
-fn parse_merge_on_key(on_part: &str) -> DFResult<String> {
+fn parse_merge_on_key(on_part: &str) -> Result<String> {
     let eq_pos = on_part.find('=').ok_or_else(|| {
         DataFusionError::NotImplemented(
             "MERGE ON clause must be a simple equality like `t.id = s.id`".to_string(),
@@ -505,9 +506,7 @@ fn parse_merge_on_key(on_part: &str) -> DFResult<String> {
     Ok(left_col)
 }
 
-use arrow_array::RecordBatchIterator;
-
-async fn handle_insert(ctx: &SessionContext, insert: Insert) -> DFResult<()> {
+async fn handle_insert(ctx: &SessionContext, insert: Insert) -> Result<()> {
     // Extract basic pieces from the INSERT statement.
     let Insert {
         table,
@@ -539,7 +538,7 @@ async fn handle_insert(ctx: &SessionContext, insert: Insert) -> DFResult<()> {
     };
 
     let enable_normalization = ctx.enable_ident_normalization();
-    let table_ref = df_object_name_to_table_reference(table_name, enable_normalization)?;
+    let table_ref = object_name_to_table_reference(table_name, enable_normalization)?;
 
     // Run the source query through DataFusion to get the input batches.
     let source_sql = source.to_string();
