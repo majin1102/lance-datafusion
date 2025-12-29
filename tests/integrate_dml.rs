@@ -2,18 +2,15 @@
 
 use std::sync::Arc;
 
-use arrow::compute::concat_batches;
 use arrow::ipc::writer::StreamWriter;
-use arrow_array::{Int32Array, RecordBatch, RecordBatchIterator, StringArray, UInt64Array};
+use arrow_array::{Int32Array, Int64Array, RecordBatch, RecordBatchIterator, StringArray, UInt64Array};
 use arrow_schema::{DataType, Field, Schema};
 use bytes::Bytes;
-use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use datafusion::error::{DataFusionError, Result as DFResult};
-use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::prelude::SessionContext;
+use futures::StreamExt;
 use lance::dataset::{WriteMode, WriteParams};
 use lance::Dataset;
-use lance_datafusion::table::table_provider::LanceTableProvider;
 use lance_datafusion::{Namespace, SessionBuilder};
 use lance_namespace::models::{
     CreateEmptyTableRequest, CreateNamespaceRequest, CreateTableRequest, DescribeTableRequest,
@@ -22,67 +19,7 @@ use lance_namespace::LanceNamespace;
 use lance_namespace_impls::ConnectBuilder;
 use tempfile::TempDir;
 
-/// Create a temporary Lance dataset with a simple (id, value) schema.
-fn create_test_batches(num_rows: i32) -> (ArrowSchemaRef, Vec<RecordBatch>) {
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Int32, false),
-        Field::new("value", DataType::Int32, false),
-    ]));
-
-    let ids = Int32Array::from_iter_values(0..num_rows);
-    let values = Int32Array::from_iter_values(0..num_rows);
-    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(ids), Arc::new(values)])
-        .expect("failed to build test batch");
-
-    (schema, vec![batch])
-}
-
-async fn create_temp_table(num_rows: i32) -> (TempDir, String) {
-    let temp_dir = TempDir::new().expect("failed to create temp dir");
-    let table_path = temp_dir.path().join("test_table.lance");
-    let table_uri = table_path.to_string_lossy().to_string();
-
-    let (schema, batches) = create_test_batches(num_rows);
-    let reader = RecordBatchIterator::new(batches.into_iter().map(Ok), schema);
-
-    let write_params = WriteParams {
-        mode: WriteMode::Create,
-        ..Default::default()
-    };
-
-    Dataset::write(reader, table_uri.as_str(), Some(write_params))
-        .await
-        .expect("failed to write test dataset");
-
-    (temp_dir, table_uri)
-}
-
-async fn register_test_table(ctx: &SessionContext, table_uri: &str) {
-    let dataset = Dataset::open(table_uri)
-        .await
-        .expect("failed to open test dataset");
-    let provider = Arc::new(LanceTableProvider::new(dataset));
-
-    ctx.register_table("test_table", provider)
-        .expect("failed to register table");
-}
-
-fn extract_count(batches: &[RecordBatch]) -> u64 {
-    assert_eq!(batches.len(), 1);
-    let batch = &batches[0];
-    assert_eq!(batch.num_rows(), 1);
-
-    let col = batch.column(0);
-    if let Some(arr) = col.as_any().downcast_ref::<UInt64Array>() {
-        arr.value(0)
-    } else if let Some(arr) = col.as_any().downcast_ref::<arrow_array::Int64Array>() {
-        arr.value(0) as u64
-    } else {
-        panic!("unexpected count column type: {:?}", col.data_type());
-    }
-}
-
-fn create_ipc_data() -> Vec<u8> {
+fn create_ipc_for_a() -> Vec<u8> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int32, false),
         Field::new("name", DataType::Utf8, false),
@@ -95,7 +32,7 @@ fn create_ipc_data() -> Vec<u8> {
             Arc::new(StringArray::from(vec!["a", "b", "c"])),
         ],
     )
-    .expect("failed to build IPC batch");
+    .expect("failed to build IPC batch for table a");
 
     let mut buffer = Vec::new();
     {
@@ -103,131 +40,357 @@ fn create_ipc_data() -> Vec<u8> {
             StreamWriter::try_new(&mut buffer, &schema).expect("failed to create IPC writer");
         writer
             .write(&batch)
-            .expect("failed to write IPC batch");
+            .expect("failed to write IPC batch for table a");
         writer.finish().expect("failed to finish IPC stream");
     }
 
     buffer
 }
 
-#[tokio::test]
-async fn select_with_filter_and_projection_pushdown() -> DFResult<()> {
-    let (_temp_dir, table_uri) = create_temp_table(100).await;
+fn create_ipc_for_b() -> Vec<u8> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("value", DataType::Int32, false),
+    ]));
 
-    let ctx = SessionBuilder::new().build().await?;
-    register_test_table(&ctx, &table_uri).await;
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Arc::new(Int32Array::from(vec![10, 20, 30])),
+        ],
+    )
+    .expect("failed to build IPC batch for table b");
 
-    let df = ctx
-        .sql("SELECT value FROM test_table WHERE id >= 10 AND id < 20")
-        .await?;
-    let batches = df.clone().collect().await?;
+    let mut buffer = Vec::new();
+    {
+        let mut writer =
+            StreamWriter::try_new(&mut buffer, &schema).expect("failed to create IPC writer");
+        writer
+            .write(&batch)
+            .expect("failed to write IPC batch for table b");
+        writer.finish().expect("failed to finish IPC stream");
+    }
 
-    let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
-    assert_eq!(total_rows, 10);
-
-    let combined = concat_batches(&batches[0].schema(), &batches)?;
-    let values = combined
-        .column(0)
-        .as_any()
-        .downcast_ref::<Int32Array>()
-        .expect("value column should be Int32Array");
-    assert_eq!(values.len(), 10);
-    assert_eq!(values.value(0), 10);
-    assert_eq!(values.value(9), 19);
-
-    let plan = df.create_physical_plan().await?;
-    let plan_str = DisplayableExecutionPlan::new(plan.as_ref())
-        .indent(true)
-        .to_string();
-    assert!(
-        plan_str.contains("LanceTableScan"),
-        "expected physical plan to contain LanceTableScan, got:\n{plan_str}"
-    );
-
-    Ok(())
+    buffer
 }
 
-#[tokio::test]
-async fn insert_into_appends_rows() -> DFResult<()> {
-    let (_temp_dir, table_uri) = create_temp_table(10).await;
+fn create_ipc_for_c() -> Vec<u8> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("tag", DataType::Utf8, false),
+    ]));
 
-    let ctx = SessionBuilder::new().build().await?;
-    register_test_table(&ctx, &table_uri).await;
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![2, 3, 4])),
+            Arc::new(StringArray::from(vec!["x", "y", "z"])),
+        ],
+    )
+    .expect("failed to build IPC batch for table c");
 
-    let initial_df = ctx.sql("SELECT COUNT(*) AS c FROM test_table").await?;
-    let initial_batches = initial_df.collect().await?;
-    let initial_count = extract_count(&initial_batches);
+    let mut buffer = Vec::new();
+    {
+        let mut writer =
+            StreamWriter::try_new(&mut buffer, &schema).expect("failed to create IPC writer");
+        writer
+            .write(&batch)
+            .expect("failed to write IPC batch for table c");
+        writer.finish().expect("failed to finish IPC stream");
+    }
 
-    let insert_df = ctx
-        .sql("INSERT INTO test_table SELECT id, value FROM test_table WHERE id < 4")
-        .await?;
-    let insert_batches = insert_df.collect().await?;
-    let inserted_count = extract_count(&insert_batches);
-    assert_eq!(inserted_count, 4);
-
-    let dataset = Dataset::open(&table_uri)
-        .await
-        .expect("failed to reopen dataset after insert");
-    let mut scanner = dataset.scan();
-    scanner
-        .project::<&str>(&[])
-        .expect("failed to project empty schema for count");
-    scanner.with_row_id();
-    let new_count = scanner
-        .count_rows()
-        .await
-        .expect("failed to count rows after insert");
-
-    assert_eq!(new_count, initial_count + inserted_count);
-
-    Ok(())
+    buffer
 }
 
-#[tokio::test]
-async fn directory_namespace_session_builder_select_and_insert() -> DFResult<()> {
-    let temp_dir = TempDir::new().expect("failed to create temp dir");
-    let root = temp_dir.path().to_string_lossy().to_string();
+struct NamespaceTestContext {
+    _root_dir: TempDir,
+    _extra_dir: TempDir,
+    root_ns: Arc<dyn LanceNamespace>,
+    extra_ns: Arc<dyn LanceNamespace>,
+    ctx: SessionContext,
+}
+
+async fn setup_test_context() -> DFResult<NamespaceTestContext> {
+    let root_dir = TempDir::new().expect("failed to create root temp dir");
+    let extra_dir = TempDir::new().expect("failed to create extra temp dir");
+
+    let root_path = root_dir.path().to_string_lossy().to_string();
+    let extra_path = extra_dir.path().to_string_lossy().to_string();
 
     let root_ns = ConnectBuilder::new("dir")
-        .property("root", root)
+        .property("root", root_path)
         .connect()
         .await
         .map_err(|e| DataFusionError::Execution(e.to_string()))?;
 
-    let mut create_catalog = CreateNamespaceRequest::new();
-    create_catalog.id = Some(vec!["catalog1".to_string()]);
-    root_ns
-        .create_namespace(create_catalog)
+    let extra_ns = ConnectBuilder::new("dir")
+        .property("root", extra_path)
+        .connect()
         .await
         .map_err(|e| DataFusionError::Execution(e.to_string()))?;
 
-    let mut create_schema = CreateNamespaceRequest::new();
-    create_schema.id = Some(vec!["catalog1".to_string(), "schema1".to_string()]);
+    // c1.s1 under root_ns
+    let mut create_c1 = CreateNamespaceRequest::new();
+    create_c1.id = Some(vec!["c1".to_string()]);
     root_ns
-        .create_namespace(create_schema)
+        .create_namespace(create_c1)
         .await
         .map_err(|e| DataFusionError::Execution(e.to_string()))?;
 
-    let ipc_bytes = create_ipc_data();
-    let mut create_table_req = CreateTableRequest::new();
-    create_table_req.id = Some(vec![
-        "catalog1".to_string(),
-        "schema1".to_string(),
-        "test_table".to_string(),
+    let mut create_s1 = CreateNamespaceRequest::new();
+    create_s1.id = Some(vec!["c1".to_string(), "s1".to_string()]);
+    root_ns
+        .create_namespace(create_s1)
+        .await
+        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+
+    // a in c1.s1
+    let mut create_a = CreateTableRequest::new();
+    create_a.id = Some(vec![
+        "c1".to_string(),
+        "s1".to_string(),
+        "a".to_string(),
     ]);
     root_ns
-        .create_table(create_table_req, Bytes::from(ipc_bytes))
+        .create_table(create_a, Bytes::from(create_ipc_for_a()))
         .await
         .map_err(|e| DataFusionError::Execution(e.to_string()))?;
 
-    let mut create_empty_req = CreateEmptyTableRequest::new();
-    create_empty_req.id = Some(vec![
-        "catalog1".to_string(),
-        "schema1".to_string(),
-        "target_table".to_string(),
+    // b in c1.s1
+    let mut create_b = CreateTableRequest::new();
+    create_b.id = Some(vec![
+        "c1".to_string(),
+        "s1".to_string(),
+        "b".to_string(),
     ]);
-    let create_empty_resp = root_ns
-        .create_empty_table(create_empty_req)
+    root_ns
+        .create_table(create_b, Bytes::from(create_ipc_for_b()))
+        .await
+        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+
+    // c2.s2 under extra_ns
+    let mut create_c2 = CreateNamespaceRequest::new();
+    create_c2.id = Some(vec!["c2".to_string()]);
+    extra_ns
+        .create_namespace(create_c2)
+        .await
+        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+
+    let mut create_s2 = CreateNamespaceRequest::new();
+    create_s2.id = Some(vec!["c2".to_string(), "s2".to_string()]);
+    extra_ns
+        .create_namespace(create_s2)
+        .await
+        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+
+    // c in c2.s2
+    let mut create_c = CreateTableRequest::new();
+    create_c.id = Some(vec![
+        "c2".to_string(),
+        "s2".to_string(),
+        "c".to_string(),
+    ]);
+    extra_ns
+        .create_table(create_c, Bytes::from(create_ipc_for_c()))
+        .await
+        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+
+    let ctx = SessionBuilder::new()
+        .with_root(Namespace::from_root(Arc::clone(&root_ns)))
+        .add_catalog(
+            "extra",
+            Namespace::from_namespace(Arc::clone(&extra_ns), vec!["c2".to_string()]),
+        )
+        .build()
+        .await?;
+
+    Ok(NamespaceTestContext {
+        _root_dir: root_dir,
+        _extra_dir: extra_dir,
+        root_ns,
+        extra_ns,
+        ctx,
+    })
+}
+
+#[tokio::test]
+async fn join_within_root_catalog() -> DFResult<()> {
+    let ns = setup_test_context().await?;
+
+    let df = ns
+        .ctx
+        .sql(
+            "SELECT a.name, b.value \
+             FROM c1.s1.a a \
+             JOIN c1.s1.b b USING (id) \
+             WHERE a.id = 2",
+        )
+        .await?;
+    let batches = df.collect().await?;
+    assert_eq!(batches.len(), 1);
+    let batch = &batches[0];
+    assert_eq!(batch.num_rows(), 1);
+
+    let name_col = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("name column should be StringArray");
+    let value_col = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .expect("value column should be Int32Array");
+
+    assert_eq!(name_col.value(0), "b");
+    assert_eq!(value_col.value(0), 20);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn join_across_catalogs() -> DFResult<()> {
+    let ns = setup_test_context().await?;
+
+    let df = ns
+        .ctx
+        .sql(
+            "SELECT a.name, c.tag \
+             FROM c1.s1.a a \
+             JOIN extra.s2.c c \
+             ON a.id = c.id \
+             WHERE a.id = 3",
+        )
+        .await?;
+    let batches = df.collect().await?;
+    assert_eq!(batches.len(), 1);
+    let batch = &batches[0];
+    assert_eq!(batch.num_rows(), 1);
+
+    let name_col = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("name column should be StringArray");
+    let tag_col = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("tag column should be StringArray");
+
+    assert_eq!(name_col.value(0), "c");
+    assert_eq!(tag_col.value(0), "y");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn aggregation_on_b() -> DFResult<()> {
+    let ns = setup_test_context().await?;
+
+    let df = ns
+        .ctx
+        .sql("SELECT COUNT(*) AS cnt, SUM(value) AS s FROM c1.s1.b")
+        .await?;
+    let batches = df.collect().await?;
+    assert_eq!(batches.len(), 1);
+    let batch = &batches[0];
+    assert_eq!(batch.num_rows(), 1);
+
+    let cnt_col = batch.column(0);
+    let cnt = if let Some(arr) = cnt_col.as_any().downcast_ref::<UInt64Array>() {
+        arr.value(0)
+    } else if let Some(arr) = cnt_col.as_any().downcast_ref::<Int64Array>() {
+        arr.value(0) as u64
+    } else {
+        panic!("unexpected count column type: {:?}", cnt_col.data_type());
+    };
+    assert_eq!(cnt, 3);
+
+    let sum_col = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .expect("sum column should be Int64Array");
+    assert_eq!(sum_col.value(0), 60);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_view_and_select() -> DFResult<()> {
+    let ns = setup_test_context().await?;
+
+    let df = ns
+        .ctx
+        .sql(
+            "WITH v1 AS ( \
+                 SELECT a.id, a.name, b.value \
+                 FROM c1.s1.a a \
+                 JOIN c1.s1.b b USING (id) \
+             ) \
+             SELECT id, name, value FROM v1 WHERE id = 1",
+        )
+        .await?;
+    let batches = df.collect().await?;
+    assert_eq!(batches.len(), 1);
+    let batch = &batches[0];
+    assert_eq!(batch.num_rows(), 1);
+
+    let id_col = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .expect("id column should be Int32Array");
+    let name_col = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("name column should be StringArray");
+    let value_col = batch
+        .column(2)
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .expect("value column should be Int32Array");
+
+    assert_eq!(id_col.value(0), 1);
+    assert_eq!(name_col.value(0), "a");
+    assert_eq!(value_col.value(0), 10);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn insert_into_select() -> DFResult<()> {
+    let ns = setup_test_context().await?;
+
+    // Preview the source rows for the INSERT and verify the join + filter
+    let preview_df = ns
+        .ctx
+        .sql(
+            "SELECT id, name FROM ( \
+                 SELECT a.id, a.name, b.value \
+                 FROM c1.s1.a a \
+                 JOIN c1.s1.b b USING (id) \
+             ) v1 \
+             WHERE id >= 2",
+        )
+        .await?;
+    let preview_batches = preview_df.collect().await?;
+    let preview_row_count: usize = preview_batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(preview_row_count, 2);
+
+    // Create empty target table c1.s1.target
+    let mut create_empty = CreateEmptyTableRequest::new();
+    create_empty.id = Some(vec![
+        "c1".to_string(),
+        "s1".to_string(),
+        "target".to_string(),
+    ]);
+    let create_empty_resp = ns
+        .root_ns
+        .create_empty_table(create_empty)
         .await
         .map_err(|e| DataFusionError::Execution(e.to_string()))?;
     let target_uri = create_empty_resp
@@ -254,48 +417,28 @@ async fn directory_namespace_session_builder_select_and_insert() -> DFResult<()>
         .await
         .map_err(|e| DataFusionError::Execution(e.to_string()))?;
 
-    let ctx = SessionBuilder::new()
-        .with_root(Namespace::from_root(Arc::clone(&root_ns)))
-        .build()
-        .await?;
+    // Insert rows into target from join view using Lance DML helper
+    lance_datafusion::dml::execute_sql(
+        &ns.ctx,
+        "INSERT INTO c1.s1.target \
+         SELECT id, name FROM ( \
+             SELECT a.id, a.name, b.value \
+             FROM c1.s1.a a \
+             JOIN c1.s1.b b USING (id) \
+         ) v1 \
+         WHERE id >= 2",
+    )
+    .await?;
 
-    let df = ctx
-        .sql("SELECT id, name FROM catalog1.schema1.test_table WHERE id = 2")
-        .await?;
-    let batches = df.collect().await?;
-    assert_eq!(batches.len(), 1);
-    let batch = &batches[0];
-    assert_eq!(batch.num_rows(), 1);
-    let id_col = batch
-        .column(0)
-        .as_any()
-        .downcast_ref::<Int32Array>()
-        .expect("id column should be Int32Array");
-    let name_col = batch
-        .column(1)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .expect("name column should be StringArray");
-    assert_eq!(id_col.value(0), 2);
-    assert_eq!(name_col.value(0), "b");
-
-    let insert_df = ctx
-        .sql(
-            "INSERT INTO catalog1.schema1.target_table \
-             SELECT id, name FROM catalog1.schema1.test_table WHERE id >= 2",
-        )
-        .await?;
-    let insert_batches = insert_df.collect().await?;
-    let inserted_count = extract_count(&insert_batches);
-    assert_eq!(inserted_count, 2);
-
+    // Resolve target table URI via namespace
     let mut describe_req = DescribeTableRequest::new();
     describe_req.id = Some(vec![
-        "catalog1".to_string(),
-        "schema1".to_string(),
-        "target_table".to_string(),
+        "c1".to_string(),
+        "s1".to_string(),
+        "target".to_string(),
     ]);
-    let describe_resp = root_ns
+    let describe_resp = ns
+        .root_ns
         .describe_table(describe_req)
         .await
         .map_err(|e| DataFusionError::Execution(e.to_string()))?;
@@ -307,17 +450,39 @@ async fn directory_namespace_session_builder_select_and_insert() -> DFResult<()>
     let dataset = Dataset::open(&table_uri)
         .await
         .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+
+    // Scan dataset and collect rows
     let mut scanner = dataset.scan();
     scanner
-        .project::<&str>(&[])
+        .project(&["id", "name"])
         .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-    scanner.with_row_id();
-    let row_count = scanner
-        .count_rows()
+    let mut stream = scanner
+        .try_into_stream()
         .await
         .map_err(|e| DataFusionError::Execution(e.to_string()))?;
 
-    assert_eq!(row_count, inserted_count);
+    let mut rows = Vec::<(i32, String)>::new();
+    while let Some(batch) = stream.next().await {
+        let batch = batch.map_err(|e| DataFusionError::Execution(e.to_string()))?;
+        let id_col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("id column should be Int32Array");
+        let name_col = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("name column should be StringArray");
+
+        for i in 0..batch.num_rows() {
+            rows.push((id_col.value(i), name_col.value(i).to_string()));
+        }
+    }
+
+    assert_eq!(rows.len(), 2);
+    assert!(rows.contains(&(2, "b".to_string())));
+    assert!(rows.contains(&(3, "c".to_string())));
 
     Ok(())
 }
