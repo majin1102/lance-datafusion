@@ -3263,6 +3263,7 @@ dependencies = [
  "arrow-array",
  "arrow-schema",
  "async-trait",
+ "bytes",
  "dashmap",
  "datafusion",
  "datafusion-sql",

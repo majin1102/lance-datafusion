@@ -16,5 +16,6 @@ pub mod table;
 pub mod task_writer;
 
 pub use catalog::{LanceCatalogProvider, LanceCatalogProviderList};
+pub use namespace::Namespace;
 pub use schema::LanceSchemaProvider;
 pub use session_builder::SessionBuilder;

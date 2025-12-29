@@ -73,9 +73,9 @@ impl Namespace {
 
     pub async fn children(&self) -> Result<Vec<Namespace>> {
         let root = Arc::clone(&self.root);
-        let namespace_id = self.namespace_id.clone();
+        let namespace_id = self.namespace_id.clone().unwrap_or_default();
         let request = ListNamespacesRequest {
-            id: namespace_id,
+            id: Some(namespace_id.clone()),
             page_token: None,
             limit: None,
         };
@@ -95,9 +95,9 @@ impl Namespace {
 
     pub async fn tables(&self) -> Result<Vec<String>> {
         let root = Arc::clone(&self.root);
-        let namespace_id = self.namespace_id.clone();
+        let namespace_id = self.namespace_id.clone().unwrap_or_default();
         let request = ListTablesRequest {
-            id: namespace_id,
+            id: Some(namespace_id),
             page_token: None,
             limit: None,
         };
