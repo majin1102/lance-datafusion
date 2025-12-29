@@ -50,9 +50,7 @@ impl LanceTableScan {
                 .map(|i| schema.field(*i).name().clone())
                 .collect();
 
-            scanner
-                .project(&names)
-                .map_err(to_datafusion_error)?;
+            scanner.project(&names).map_err(to_datafusion_error)?;
         }
 
         // Combine filters with AND and forward as a DataFusion expression.
@@ -73,10 +71,7 @@ impl LanceTableScan {
 
         // Let Lance build the full physical plan, including any internal
         // filter / projection / limit pushdown and partitioning.
-        let plan = scanner
-            .create_plan()
-            .await
-            .map_err(to_datafusion_error)?;
+        let plan = scanner.create_plan().await.map_err(to_datafusion_error)?;
 
         Ok(Self {
             plan,

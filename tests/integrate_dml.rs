@@ -24,11 +24,7 @@ struct NamespaceTestContext {
 }
 
 fn col<T: 'static>(batch: &RecordBatch, idx: usize) -> &T {
-    batch
-        .column(idx)
-        .as_any()
-        .downcast_ref::<T>()
-        .unwrap()
+    batch.column(idx).as_any().downcast_ref::<T>().unwrap()
 }
 
 fn customers_data() -> (Arc<Schema>, RecordBatch) {
@@ -64,7 +60,11 @@ fn orders_data() -> (Arc<Schema>, RecordBatch) {
 
     let batch = RecordBatch::try_new(
         schema.clone(),
-        vec![Arc::new(order_ids), Arc::new(customer_ids), Arc::new(amounts)],
+        vec![
+            Arc::new(order_ids),
+            Arc::new(customer_ids),
+            Arc::new(amounts),
+        ],
     )
     .unwrap();
 
@@ -84,7 +84,11 @@ fn orders2_data() -> (Arc<Schema>, RecordBatch) {
 
     let batch = RecordBatch::try_new(
         schema.clone(),
-        vec![Arc::new(order_ids), Arc::new(customer_ids), Arc::new(amounts)],
+        vec![
+            Arc::new(order_ids),
+            Arc::new(customer_ids),
+            Arc::new(amounts),
+        ],
     )
     .unwrap();
 

@@ -25,8 +25,8 @@ use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan, Partitioning, PlanProperties};
-use futures::{Stream, TryStreamExt};
 use futures::stream;
+use futures::{Stream, TryStreamExt};
 
 use lance::dataset::{InsertBuilder, WriteMode, WriteParams};
 
@@ -96,10 +96,7 @@ impl LanceInsertExec {
         // Collect all input batches.
         let batches: Vec<RecordBatch> = input_stream.try_collect().await?;
 
-        let inserted_rows: u64 = batches
-            .iter()
-            .map(|b| b.num_rows() as u64)
-            .sum();
+        let inserted_rows: u64 = batches.iter().map(|b| b.num_rows() as u64).sum();
 
         if inserted_rows > 0 {
             // Configure an append into the target URI using Lance's insert builder.
@@ -117,10 +114,7 @@ impl LanceInsertExec {
 
         // Produce a single-row count batch, even if 0 rows were inserted.
         let count_array = UInt64Array::from(vec![inserted_rows]);
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![Arc::new(count_array) as _],
-        )
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(count_array) as _])
             .map_err(to_datafusion_error)?;
 
         let out_stream = stream::iter(vec![Ok(batch)]);
@@ -202,10 +196,6 @@ impl DisplayAs for LanceInsertExec {
         _t: datafusion::physical_plan::DisplayFormatType,
         f: &mut std::fmt::Formatter,
     ) -> std::fmt::Result {
-        write!(
-            f,
-            "LanceInsertExec uri:{}",
-            self.table_uri
-        )
+        write!(f, "LanceInsertExec uri:{}", self.table_uri)
     }
 }

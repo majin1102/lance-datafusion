@@ -47,14 +47,18 @@ impl LanceSchemaProvider {
         id
     }
 
-    async fn load_and_cache_table(&self, table_name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
+    async fn load_and_cache_table(
+        &self,
+        table_name: &str,
+    ) -> Result<Option<Arc<dyn TableProvider>>> {
         let dataset = self
             .namespace
             .load_dataset(table_name)
             .await
             .map_err(to_datafusion_error)?;
-        let table_provider= Arc::new(LanceTableProvider::new(dataset));
-        self.tables.insert(table_name.to_string(), table_provider.clone());
+        let table_provider = Arc::new(LanceTableProvider::new(dataset));
+        self.tables
+            .insert(table_name.to_string(), table_provider.clone());
         Ok(Some(table_provider as Arc<dyn TableProvider>))
     }
 }
@@ -66,7 +70,10 @@ impl SchemaProvider for LanceSchemaProvider {
     }
 
     fn table_names(&self) -> Vec<String> {
-        self.tables.iter().map(|entry| entry.key().clone()).collect()
+        self.tables
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect()
     }
 
     async fn table(&self, table_name: &str) -> Result<Option<Arc<dyn TableProvider>>> {

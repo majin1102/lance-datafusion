@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::table::table_provider::LanceTableProvider;
 use arrow_array::RecordBatchIterator;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::SessionContext;
@@ -17,7 +18,6 @@ use datafusion_sql::sqlparser::{
 use datafusion_sql::TableReference;
 use lance::dataset::{Dataset, MergeInsertBuilder, UpdateBuilder, WhenMatched, WhenNotMatched};
 use std::sync::Arc;
-use crate::table::table_provider::LanceTableProvider;
 
 /// Execute a minimal subset of DML against Lance tables.
 ///
@@ -280,7 +280,6 @@ async fn execute_lance_update(
             )
         })?;
 
-
     let uri = lance_provider.dataset().uri();
     let dataset = lance_provider.dataset().clone();
     let mut builder = UpdateBuilder::new(Arc::new(dataset));
@@ -344,8 +343,8 @@ async fn execute_lance_merge(ctx: &SessionContext, sql: &str) -> Result<()> {
     })?;
 
     // Configure MergeInsert as upsert: update all matching rows and insert non-matching rows
-    let mut builder =
-        MergeInsertBuilder::try_new(Arc::new(dataset), vec![on_key.clone()]).map_err(|e| {
+    let mut builder = MergeInsertBuilder::try_new(Arc::new(dataset), vec![on_key.clone()])
+        .map_err(|e| {
             DataFusionError::Execution(format!(
                 "Failed to create MergeInsertBuilder for MERGE on '{}': {}",
                 uri, e

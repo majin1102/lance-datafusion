@@ -2,6 +2,9 @@
 
 use std::sync::Arc;
 
+use crate::error::to_datafusion_error;
+use crate::physical_plan::scan::LanceTableScan;
+use crate::physical_plan::write::LanceInsertExec;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
@@ -12,9 +15,6 @@ use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::ExecutionPlan;
 use lance::dataset::Dataset;
-use crate::error::to_datafusion_error;
-use crate::physical_plan::scan::LanceTableScan;
-use crate::physical_plan::write::LanceInsertExec;
 
 /// Lazy table provider for Lance datasets.
 ///
@@ -53,7 +53,8 @@ impl LanceTableProvider {
     }
 
     pub async fn is_stale(&self) -> Result<bool> {
-        let latest_version_number = self.dataset
+        let latest_version_number = self
+            .dataset
             .latest_version_id()
             .await
             .map_err(to_datafusion_error)?;
