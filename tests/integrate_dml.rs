@@ -10,9 +10,9 @@ use futures::StreamExt;
 use lance::dataset::{WriteMode, WriteParams};
 use lance::Dataset;
 use lance_datafusion::{Namespace, SessionBuilder};
-use lance_namespace::models::{CreateNamespaceRequest, DescribeTableRequest, RegisterTableRequest};
+use lance_namespace::models::{CreateNamespaceRequest, DescribeTableRequest};
 use lance_namespace::LanceNamespace;
-use lance_namespace_impls::ConnectBuilder;
+use lance_namespace_impls::DirectoryNamespaceBuilder;
 use tempfile::TempDir;
 
 struct NamespaceTestContext {
@@ -21,6 +21,14 @@ struct NamespaceTestContext {
     root_ns: Arc<dyn LanceNamespace>,
     extra_ns: Arc<dyn LanceNamespace>,
     ctx: SessionContext,
+}
+
+fn col<T: 'static>(batch: &RecordBatch, idx: usize) -> &T {
+    batch
+        .column(idx)
+        .as_any()
+        .downcast_ref::<T>()
+        .unwrap()
 }
 
 fn customers_data() -> (Arc<Schema>, RecordBatch) {
@@ -38,7 +46,7 @@ fn customers_data() -> (Arc<Schema>, RecordBatch) {
         schema.clone(),
         vec![Arc::new(customer_ids), Arc::new(names), Arc::new(cities)],
     )
-    .expect("failed to build customers batch");
+    .unwrap();
 
     (schema, batch)
 }
@@ -58,7 +66,27 @@ fn orders_data() -> (Arc<Schema>, RecordBatch) {
         schema.clone(),
         vec![Arc::new(order_ids), Arc::new(customer_ids), Arc::new(amounts)],
     )
-    .expect("failed to build orders batch");
+    .unwrap();
+
+    (schema, batch)
+}
+
+fn orders2_data() -> (Arc<Schema>, RecordBatch) {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("order_id", DataType::Int32, false),
+        Field::new("customer_id", DataType::Int32, false),
+        Field::new("amount", DataType::Int32, false),
+    ]));
+
+    let order_ids = Int32Array::from(vec![201, 202]);
+    let customer_ids = Int32Array::from(vec![1, 2]);
+    let amounts = Int32Array::from(vec![150, 250]);
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(order_ids), Arc::new(customer_ids), Arc::new(amounts)],
+    )
+    .unwrap();
 
     (schema, batch)
 }
@@ -76,26 +104,43 @@ fn customers_dim_data() -> (Arc<Schema>, RecordBatch) {
         schema.clone(),
         vec![Arc::new(customer_ids), Arc::new(segments)],
     )
-    .expect("failed to build customers_dim batch");
+    .unwrap();
+
+    (schema, batch)
+}
+
+fn empty_high_value_orders() -> (Arc<Schema>, RecordBatch) {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("name", DataType::Utf8, false),
+        Field::new("amount", DataType::Int32, false),
+    ]));
+
+    let ids = Int32Array::from(Vec::<i32>::new());
+    let names = StringArray::from(Vec::<&str>::new());
+    let amounts = Int32Array::from(Vec::<i32>::new());
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(ids), Arc::new(names), Arc::new(amounts)],
+    )
+    .unwrap();
 
     (schema, batch)
 }
 
 async fn write_table(
     dir: &TempDir,
-    relative_path: &str,
+    file_name: &str,
     schema: Arc<Schema>,
     batch: RecordBatch,
 ) -> DFResult<()> {
-    let full_path = dir.path().join(relative_path);
+    let full_path = dir.path().join(file_name);
     if let Some(parent) = full_path.parent() {
-        std::fs::create_dir_all(parent).expect("failed to create parent dirs for table");
+        std::fs::create_dir_all(parent).unwrap();
     }
 
-    let uri = full_path
-        .to_str()
-        .expect("failed to convert table path to string")
-        .to_string();
+    let uri = full_path.to_str().unwrap().to_string();
 
     let reader = RecordBatchIterator::new(vec![Ok(batch)], schema);
     let write_params = WriteParams {
@@ -110,117 +155,125 @@ async fn write_table(
     Ok(())
 }
 
-async fn register_table(
-    ns: &Arc<dyn LanceNamespace>,
-    id: Vec<String>,
-    location: &str,
-) -> DFResult<()> {
-    let mut req = RegisterTableRequest::new(location.to_string());
-    req.id = Some(id);
-
-    ns.register_table(req)
-        .await
-        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-
-    Ok(())
-}
-
 async fn setup_test_context() -> DFResult<NamespaceTestContext> {
-    let root_dir = TempDir::new().expect("failed to create root temp dir");
-    let extra_dir = TempDir::new().expect("failed to create extra temp dir");
+    let root_dir = TempDir::new().unwrap();
+    let extra_dir = TempDir::new().unwrap();
+
+    let (customers_schema, customers_batch) = customers_data();
+    write_table(
+        &root_dir,
+        "retail$sales$customers.lance",
+        customers_schema,
+        customers_batch,
+    )
+    .await?;
+
+    let (orders_schema, orders_batch) = orders_data();
+    write_table(
+        &root_dir,
+        "retail$sales$orders.lance",
+        orders_schema,
+        orders_batch,
+    )
+    .await?;
+
+    let (orders2_schema, orders2_batch) = orders2_data();
+    write_table(
+        &root_dir,
+        "wholesale$sales2$orders2.lance",
+        orders2_schema,
+        orders2_batch,
+    )
+    .await?;
+
+    let (high_value_schema, high_value_batch) = empty_high_value_orders();
+    write_table(
+        &root_dir,
+        "retail$sales$high_value_orders.lance",
+        high_value_schema,
+        high_value_batch,
+    )
+    .await?;
+
+    let (dim_schema, dim_batch) = customers_dim_data();
+    write_table(
+        &extra_dir,
+        "crm$dim$customers_dim.lance",
+        dim_schema,
+        dim_batch,
+    )
+    .await?;
 
     let root_path = root_dir.path().to_string_lossy().to_string();
+    let root_dir_ns = DirectoryNamespaceBuilder::new(root_path)
+        .manifest_enabled(true)
+        .dir_listing_enabled(true)
+        .build()
+        .await
+        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+
     let extra_path = extra_dir.path().to_string_lossy().to_string();
-
-    let root_ns = ConnectBuilder::new("dir")
-        .property("root", root_path)
-        .connect()
+    let extra_dir_ns = DirectoryNamespaceBuilder::new(extra_path)
+        .manifest_enabled(true)
+        .dir_listing_enabled(true)
+        .build()
         .await
         .map_err(|e| DataFusionError::Execution(e.to_string()))?;
 
-    let extra_ns = ConnectBuilder::new("dir")
-        .property("root", extra_path)
-        .connect()
-        .await
-        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-
-    // retail.sales under root_ns
     let mut create_retail = CreateNamespaceRequest::new();
     create_retail.id = Some(vec!["retail".to_string()]);
-    root_ns
+    root_dir_ns
         .create_namespace(create_retail)
         .await
         .map_err(|e| DataFusionError::Execution(e.to_string()))?;
 
     let mut create_sales = CreateNamespaceRequest::new();
     create_sales.id = Some(vec!["retail".to_string(), "sales".to_string()]);
-    root_ns
+    root_dir_ns
         .create_namespace(create_sales)
         .await
         .map_err(|e| DataFusionError::Execution(e.to_string()))?;
 
-    // crm.dim under extra_ns
+    let mut create_wholesale = CreateNamespaceRequest::new();
+    create_wholesale.id = Some(vec!["wholesale".to_string()]);
+    root_dir_ns
+        .create_namespace(create_wholesale)
+        .await
+        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+
+    let mut create_sales2 = CreateNamespaceRequest::new();
+    create_sales2.id = Some(vec!["wholesale".to_string(), "sales2".to_string()]);
+    root_dir_ns
+        .create_namespace(create_sales2)
+        .await
+        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+
     let mut create_crm = CreateNamespaceRequest::new();
     create_crm.id = Some(vec!["crm".to_string()]);
-    extra_ns
+    extra_dir_ns
         .create_namespace(create_crm)
         .await
         .map_err(|e| DataFusionError::Execution(e.to_string()))?;
 
     let mut create_dim = CreateNamespaceRequest::new();
     create_dim.id = Some(vec!["crm".to_string(), "dim".to_string()]);
-    extra_ns
+    extra_dir_ns
         .create_namespace(create_dim)
         .await
         .map_err(|e| DataFusionError::Execution(e.to_string()))?;
 
-    // Write and register retail.sales.customers
-    let (customers_schema, customers_batch) = customers_data();
-    write_table(
-        &root_dir,
-        "retail/sales/customers.lance",
-        customers_schema,
-        customers_batch,
-    )
-    .await?;
-    register_table(
-        &root_ns,
-        vec!["retail".to_string(), "sales".to_string(), "customers".to_string()],
-        "retail/sales/customers.lance",
-    )
-    .await?;
+    root_dir_ns
+        .migrate()
+        .await
+        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
 
-    // Write and register retail.sales.orders
-    let (orders_schema, orders_batch) = orders_data();
-    write_table(
-        &root_dir,
-        "retail/sales/orders.lance",
-        orders_schema,
-        orders_batch,
-    )
-    .await?;
-    register_table(
-        &root_ns,
-        vec!["retail".to_string(), "sales".to_string(), "orders".to_string()],
-        "retail/sales/orders.lance",
-    )
-    .await?;
+    extra_dir_ns
+        .migrate()
+        .await
+        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
 
-    // Write and register crm.dim.customers_dim
-    let (dim_schema, dim_batch) = customers_dim_data();
-    write_table(
-        &extra_dir,
-        "crm/dim/customers_dim.lance",
-        dim_schema,
-        dim_batch,
-    )
-    .await?;
-    register_table(
-        &extra_ns,
-        vec!["crm".to_string(), "dim".to_string(), "customers_dim".to_string()],
-        "crm/dim/customers_dim.lance",
-    )
-    .await?;
+    let root_ns: Arc<dyn LanceNamespace> = Arc::new(root_dir_ns);
+    let extra_ns: Arc<dyn LanceNamespace> = Arc::new(extra_dir_ns);
 
     let ctx = SessionBuilder::new()
         .with_root(Namespace::from_root(Arc::clone(&root_ns)))
@@ -259,19 +312,39 @@ async fn join_within_retail() -> DFResult<()> {
     let batch = &batches[0];
     assert_eq!(batch.num_rows(), 1);
 
-    let name_col = batch
-        .column(0)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .expect("name column should be StringArray");
-    let amount_col = batch
-        .column(1)
-        .as_any()
-        .downcast_ref::<Int32Array>()
-        .expect("amount column should be Int32Array");
+    let name_col = col::<StringArray>(batch, 0);
+    let amount_col = col::<Int32Array>(batch, 1);
 
     assert_eq!(name_col.value(0), "Bob");
     assert_eq!(amount_col.value(0), 200);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn join_across_root_catalogs() -> DFResult<()> {
+    let ns = setup_test_context().await?;
+
+    let df = ns
+        .ctx
+        .sql(
+            "SELECT c.name, o2.amount \
+             FROM retail.sales.customers c \
+             JOIN wholesale.sales2.orders2 o2 \
+               ON c.customer_id = o2.customer_id \
+             WHERE o2.order_id = 202",
+        )
+        .await?;
+    let batches = df.collect().await?;
+    assert_eq!(batches.len(), 1);
+    let batch = &batches[0];
+    assert_eq!(batch.num_rows(), 1);
+
+    let name_col = col::<StringArray>(batch, 0);
+    let amount_col = col::<Int32Array>(batch, 1);
+
+    assert_eq!(name_col.value(0), "Bob");
+    assert_eq!(amount_col.value(0), 250);
 
     Ok(())
 }
@@ -295,16 +368,8 @@ async fn join_across_catalogs() -> DFResult<()> {
     let batch = &batches[0];
     assert_eq!(batch.num_rows(), 1);
 
-    let name_col = batch
-        .column(0)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .expect("name column should be StringArray");
-    let segment_col = batch
-        .column(1)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .expect("segment column should be StringArray");
+    let name_col = col::<StringArray>(batch, 0);
+    let segment_col = col::<StringArray>(batch, 1);
 
     assert_eq!(name_col.value(0), "Carol");
     assert_eq!(segment_col.value(0), "Platinum");
@@ -332,16 +397,8 @@ async fn aggregation_city_totals() -> DFResult<()> {
     let batch = &batches[0];
     assert_eq!(batch.num_rows(), 3);
 
-    let city_col = batch
-        .column(0)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .expect("city column should be StringArray");
-    let total_col = batch
-        .column(1)
-        .as_any()
-        .downcast_ref::<Int64Array>()
-        .expect("total column should be Int64Array");
+    let city_col = col::<StringArray>(batch, 0);
+    let total_col = col::<Int64Array>(batch, 1);
 
     assert_eq!(city_col.value(0), "LA");
     assert_eq!(total_col.value(0), 300);
@@ -376,21 +433,9 @@ async fn cte_view_customer_orders() -> DFResult<()> {
     let batch = &batches[0];
     assert_eq!(batch.num_rows(), 1);
 
-    let order_id_col = batch
-        .column(0)
-        .as_any()
-        .downcast_ref::<Int32Array>()
-        .expect("order_id column should be Int32Array");
-    let name_col = batch
-        .column(1)
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .expect("name column should be StringArray");
-    let amount_col = batch
-        .column(2)
-        .as_any()
-        .downcast_ref::<Int32Array>()
-        .expect("amount column should be Int32Array");
+    let order_id_col = col::<Int32Array>(batch, 0);
+    let name_col = col::<StringArray>(batch, 1);
+    let amount_col = col::<Int32Array>(batch, 2);
 
     assert_eq!(order_id_col.value(0), 101);
     assert_eq!(name_col.value(0), "Alice");
@@ -403,36 +448,6 @@ async fn cte_view_customer_orders() -> DFResult<()> {
 async fn insert_into_select_high_value() -> DFResult<()> {
     let ns = setup_test_context().await?;
 
-    // Create empty high_value_orders table under retail.sales via Dataset.write and manifest registration
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Int32, false),
-        Field::new("name", DataType::Utf8, false),
-        Field::new("amount", DataType::Int32, false),
-    ]));
-    let empty_ids = Int32Array::from(Vec::<i32>::new());
-    let empty_names = StringArray::from(Vec::<&str>::new());
-    let empty_amounts = Int32Array::from(Vec::<i32>::new());
-    let empty_batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(empty_ids), Arc::new(empty_names), Arc::new(empty_amounts)],
-    )
-    .expect("failed to build empty batch for high_value_orders");
-
-    let relative_path = "retail/sales/high_value_orders.lance";
-    write_table(&ns.root_dir, relative_path, schema, empty_batch).await?;
-
-    register_table(
-        &ns.root_ns,
-        vec![
-            "retail".to_string(),
-            "sales".to_string(),
-            "high_value_orders".to_string(),
-        ],
-        relative_path,
-    )
-    .await?;
-
-    // Run INSERT INTO ... SELECT using DML helper
     lance_datafusion::dml::execute_sql(
         &ns.ctx,
         "INSERT INTO retail.sales.high_value_orders \
@@ -445,7 +460,6 @@ async fn insert_into_select_high_value() -> DFResult<()> {
     .await
     .map_err(|e| DataFusionError::Execution(e.to_string()))?;
 
-    // Resolve table URI via namespace
     let mut describe_req = DescribeTableRequest::new();
     describe_req.id = Some(vec![
         "retail".to_string(),
@@ -457,10 +471,7 @@ async fn insert_into_select_high_value() -> DFResult<()> {
         .describe_table(describe_req)
         .await
         .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-    let table_uri = describe_resp
-        .table_uri
-        .or(describe_resp.location)
-        .expect("high_value_orders table must have a URI");
+    let table_uri = describe_resp.table_uri.or(describe_resp.location).unwrap();
 
     let dataset = Dataset::open(&table_uri)
         .await
@@ -478,21 +489,9 @@ async fn insert_into_select_high_value() -> DFResult<()> {
     let mut rows = Vec::<(i32, String, i32)>::new();
     while let Some(batch) = stream.next().await {
         let batch = batch.map_err(|e| DataFusionError::Execution(e.to_string()))?;
-        let id_col = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .expect("id column should be Int32Array");
-        let name_col = batch
-            .column(1)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .expect("name column should be StringArray");
-        let amount_col = batch
-            .column(2)
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .expect("amount column should be Int32Array");
+        let id_col = col::<Int32Array>(&batch, 0);
+        let name_col = col::<StringArray>(&batch, 1);
+        let amount_col = col::<Int32Array>(&batch, 2);
 
         for i in 0..batch.num_rows() {
             rows.push((
