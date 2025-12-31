@@ -57,7 +57,7 @@ impl LanceTableScan {
         if !filters.is_empty() {
             let mut iter = filters.iter().cloned();
             if let Some(first) = iter.next() {
-                let combined = iter.fold(first, |acc, expr| Expr::and(acc, expr));
+                let combined = iter.fold(first, Expr::and);
                 scanner.filter_expr(combined);
             }
         }

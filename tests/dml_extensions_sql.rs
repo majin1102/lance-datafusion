@@ -5,23 +5,22 @@ use std::sync::Arc;
 
 use arrow_array::{Int32Array, Int64Array, RecordBatch, RecordBatchIterator, StringArray};
 use arrow_schema::{DataType, Field, Schema};
-use datafusion::error::{DataFusionError, Result};
+use datafusion::error::{DataFusionError, Result as DFResult};
 use futures::StreamExt;
 use lance::dataset::{WriteMode, WriteParams};
 use lance::Dataset;
-use lance::dataset::builder::DatasetBuilder;
+use lance_datafusion::dml::LanceSession;
 use lance_datafusion::{Namespace, SessionBuilder};
-use lance_namespace::models::{CreateNamespaceRequest, DescribeTableRequest};
+use lance_namespace::models::CreateNamespaceRequest;
 use lance_namespace::LanceNamespace;
 use lance_namespace_impls::DirectoryNamespaceBuilder;
 use tempfile::TempDir;
-use lance_datafusion::dml::LanceSession;
 
-struct TestSession {
-    _root_dir: TempDir,
+struct NamespaceTestContext {
+    root_dir: TempDir,
     _extra_dir: TempDir,
-    root_ns: Arc<dyn LanceNamespace>,
-    session: LanceSession,
+    _root_ns: Arc<dyn LanceNamespace>,
+    ctx: LanceSession,
 }
 
 fn col<T: 'static>(batch: &RecordBatch, idx: usize) -> &T {
@@ -61,11 +60,7 @@ fn orders_data() -> (Arc<Schema>, RecordBatch) {
 
     let batch = RecordBatch::try_new(
         schema.clone(),
-        vec![
-            Arc::new(order_ids),
-            Arc::new(customer_ids),
-            Arc::new(amounts),
-        ],
+        vec![Arc::new(order_ids), Arc::new(customer_ids), Arc::new(amounts)],
     )
     .unwrap();
 
@@ -85,11 +80,7 @@ fn orders2_data() -> (Arc<Schema>, RecordBatch) {
 
     let batch = RecordBatch::try_new(
         schema.clone(),
-        vec![
-            Arc::new(order_ids),
-            Arc::new(customer_ids),
-            Arc::new(amounts),
-        ],
+        vec![Arc::new(order_ids), Arc::new(customer_ids), Arc::new(amounts)],
     )
     .unwrap();
 
@@ -139,7 +130,7 @@ async fn write_table(
     file_name: &str,
     schema: Arc<Schema>,
     batch: RecordBatch,
-) -> Result<()> {
+) -> DFResult<()> {
     let full_path = dir.path().join(file_name);
     if let Some(parent) = full_path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -159,7 +150,7 @@ async fn write_table(
     Ok(())
 }
 
-async fn setup_context() -> Result<TestSession> {
+async fn setup_test_context() -> DFResult<NamespaceTestContext> {
     let root_dir = TempDir::new()?;
     let extra_dir = TempDir::new()?;
 
@@ -279,7 +270,7 @@ async fn setup_context() -> Result<TestSession> {
     let root_ns: Arc<dyn LanceNamespace> = Arc::new(root_dir_ns);
     let extra_ns: Arc<dyn LanceNamespace> = Arc::new(extra_dir_ns);
 
-    let session = SessionBuilder::new()
+    let ctx = SessionBuilder::new()
         .with_root(Namespace::from_root(Arc::clone(&root_ns)))
         .add_catalog(
             "crm",
@@ -288,227 +279,213 @@ async fn setup_context() -> Result<TestSession> {
         .build()
         .await?;
 
-    Ok(TestSession {
-        _root_dir: root_dir,
+    Ok(NamespaceTestContext {
+        root_dir,
         _extra_dir: extra_dir,
-        root_ns,
-        session,
+        _root_ns: root_ns,
+        ctx,
     })
 }
 
 #[tokio::test]
-async fn join_within_retail() -> Result<()> {
-    let context = setup_context().await?;
+async fn delete_single_order_reports_count_and_removes_row() -> DFResult<()> {
+    let ns = setup_test_context().await?;
 
-    let df = context.session
-        .sql(
-            "SELECT customers.name, orders.amount \
-             FROM retail.sales.customers customers \
-             JOIN retail.sales.orders orders \
-               ON customers.customer_id = orders.customer_id \
-             WHERE customers.customer_id = 2",
-        )
-        .await?;
-    let batches = df.collect().await?;
-    assert_eq!(batches.len(), 1);
-    let batch = &batches[0];
-    assert_eq!(batch.num_rows(), 1);
-
-    let name_col = col::<StringArray>(batch, 0);
-    let amount_col = col::<Int32Array>(batch, 1);
-
-    assert_eq!(name_col.value(0), "Bob");
-    assert_eq!(amount_col.value(0), 200);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn join_across_root_catalogs() -> Result<()> {
-    let context = setup_context().await?;
-
-    let df = context.session
-        .sql(
-            "SELECT c.name, o2.amount \
-             FROM retail.sales.customers c \
-             JOIN wholesale.sales2.orders2 o2 \
-               ON c.customer_id = o2.customer_id \
-             WHERE o2.order_id = 202",
-        )
-        .await?;
-    let batches = df.collect().await?;
-    assert_eq!(batches.len(), 1);
-    let batch = &batches[0];
-    assert_eq!(batch.num_rows(), 1);
-
-    let name_col = col::<StringArray>(batch, 0);
-    let amount_col = col::<Int32Array>(batch, 1);
-
-    assert_eq!(name_col.value(0), "Bob");
-    assert_eq!(amount_col.value(0), 250);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn join_across_catalogs() -> Result<()> {
-    let context = setup_context().await?;
-
-    let df = context.session
-        .sql(
-            "SELECT customers.name, dim.segment \
-             FROM retail.sales.customers customers \
-             JOIN crm.dim.customers_dim dim \
-               ON customers.customer_id = dim.customer_id \
-             WHERE customers.customer_id = 3",
-        )
-        .await?;
-    let batches = df.collect().await?;
-    assert_eq!(batches.len(), 1);
-    let batch = &batches[0];
-    assert_eq!(batch.num_rows(), 1);
-
-    let name_col = col::<StringArray>(batch, 0);
-    let segment_col = col::<StringArray>(batch, 1);
-
-    assert_eq!(name_col.value(0), "Carol");
-    assert_eq!(segment_col.value(0), "Platinum");
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn aggregation_city_totals() -> Result<()> {
-    let context = setup_context().await?;
-
-    let df = context.session
-        .sql(
-            "SELECT city, SUM(amount) AS total \
-             FROM retail.sales.orders o \
-             JOIN retail.sales.customers c \
-               ON c.customer_id = o.customer_id \
-             GROUP BY city \
-             ORDER BY city",
-        )
-        .await?;
-    let batches = df.collect().await?;
-    assert_eq!(batches.len(), 1);
-    let batch = &batches[0];
-    assert_eq!(batch.num_rows(), 3);
-
-    let city_col = col::<StringArray>(batch, 0);
-    let total_col = col::<Int64Array>(batch, 1);
-
-    assert_eq!(city_col.value(0), "LA");
-    assert_eq!(total_col.value(0), 300);
-
-    assert_eq!(city_col.value(1), "NY");
-    assert_eq!(total_col.value(1), 100);
-
-    assert_eq!(city_col.value(2), "SF");
-    assert_eq!(total_col.value(2), 200);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn cte_view_customer_orders() -> Result<()> {
-    let context = setup_context().await?;
-
-    let df = context.session
-        .sql(
-            "WITH customer_orders AS ( \
-                 SELECT c.customer_id, c.name, o.order_id, o.amount \
-                 FROM retail.sales.customers c \
-                 JOIN retail.sales.orders o \
-                   ON c.customer_id = o.customer_id \
-             ) \
-             SELECT order_id, name, amount FROM customer_orders WHERE customer_id = 1",
-        )
-        .await?;
-    let batches = df.collect().await?;
-    assert_eq!(batches.len(), 1);
-    let batch = &batches[0];
-    assert_eq!(batch.num_rows(), 1);
-
-    let order_id_col = col::<Int32Array>(batch, 0);
-    let name_col = col::<StringArray>(batch, 1);
-    let amount_col = col::<Int32Array>(batch, 2);
-
-    assert_eq!(order_id_col.value(0), 101);
-    assert_eq!(name_col.value(0), "Alice");
-    assert_eq!(amount_col.value(0), 100);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn insert_into_select_high_value() -> Result<()> {
-    let context = setup_context().await?;
-
-    let df = context.session.sql(
-        "INSERT INTO retail.sales.high_value_orders \
-         SELECT c.customer_id AS id, c.name, o.amount \
-         FROM retail.sales.customers c \
-         JOIN retail.sales.orders o \
-           ON c.customer_id = o.customer_id \
-         WHERE o.amount >= 200",
+    let df = ns.ctx.execute(
+        "DELETE FROM retail.sales.orders WHERE order_id = 102",
     )
     .await
     .map_err(|e| DataFusionError::Execution(e.to_string()))?;
 
-    df.collect()
+    let batches = df
+        .collect()
+        .await
+        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+    assert_eq!(batches.len(), 1);
+
+    let batch = &batches[0];
+    assert_eq!(batch.num_columns(), 1);
+    assert_eq!(batch.num_rows(), 1);
+
+    let count_col = col::<Int64Array>(batch, 0);
+    assert_eq!(count_col.value(0), 1);
+
+    let orders_path = ns
+        .root_dir
+        .path()
+        .join("retail$sales$orders.lance");
+    let orders_uri = orders_path.to_string_lossy().to_string();
+
+    let dataset = Dataset::open(&orders_uri)
         .await
         .map_err(|e| DataFusionError::Execution(e.to_string()))?;
 
-    let mut describe_req = DescribeTableRequest::new();
-    describe_req.id = Some(vec![
-        "retail".to_string(),
-        "sales".to_string(),
-        "high_value_orders".to_string(),
-    ]);
-
-    let dataset = DatasetBuilder::from_namespace(
-        Arc::clone(&context.root_ns),
-        vec![
-            "retail".to_string(),
-            "sales".to_string(),
-            "high_value_orders".to_string(),
-        ],
-        false,
-    )
-        .await?
-        .load()
-        .await?;
-
     let mut scanner = dataset.scan();
     scanner
-        .project(&["id", "name", "amount"])
+        .project(&["order_id", "customer_id", "amount"])
         .map_err(|e| DataFusionError::Execution(e.to_string()))?;
     let mut stream = scanner
         .try_into_stream()
         .await
         .map_err(|e| DataFusionError::Execution(e.to_string()))?;
 
-    let mut rows = Vec::<(i32, String, i32)>::new();
+    let mut rows = Vec::<(i32, i32, i32)>::new();
     while let Some(batch) = stream.next().await {
         let batch = batch.map_err(|e| DataFusionError::Execution(e.to_string()))?;
-        let id_col = col::<Int32Array>(&batch, 0);
-        let name_col = col::<StringArray>(&batch, 1);
+        let order_id_col = col::<Int32Array>(&batch, 0);
+        let customer_id_col = col::<Int32Array>(&batch, 1);
         let amount_col = col::<Int32Array>(&batch, 2);
 
         for i in 0..batch.num_rows() {
             rows.push((
-                id_col.value(i),
-                name_col.value(i).to_string(),
+                order_id_col.value(i),
+                customer_id_col.value(i),
                 amount_col.value(i),
             ));
         }
     }
 
     assert_eq!(rows.len(), 2);
-    assert!(rows.contains(&(2, "Bob".to_string(), 200)));
-    assert!(rows.contains(&(3, "Carol".to_string(), 300)));
+    assert!(rows.contains(&(101, 1, 100)));
+    assert!(rows.contains(&(103, 3, 300)));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn update_customer_city_reports_count_and_updates_value() -> DFResult<()> {
+    let ns = setup_test_context().await?;
+
+    let df = ns.ctx.execute(
+        "UPDATE retail.sales.customers SET city = 'SEA' WHERE customer_id = 2",
+    )
+    .await
+    .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+
+    let batches = df
+        .collect()
+        .await
+        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+    assert_eq!(batches.len(), 1);
+
+    let batch = &batches[0];
+    assert_eq!(batch.num_columns(), 1);
+    assert_eq!(batch.num_rows(), 1);
+
+    let count_col = col::<Int64Array>(batch, 0);
+    assert_eq!(count_col.value(0), 1);
+
+    let customers_path = ns
+        .root_dir
+        .path()
+        .join("retail$sales$customers.lance");
+    let customers_uri = customers_path.to_string_lossy().to_string();
+
+    let dataset = Dataset::open(&customers_uri)
+        .await
+        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+
+    let mut scanner = dataset.scan();
+    scanner
+        .project(&["customer_id", "name", "city"])
+        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+    let mut stream = scanner
+        .try_into_stream()
+        .await
+        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+
+    let mut rows = Vec::<(i32, String, String)>::new();
+    while let Some(batch) = stream.next().await {
+        let batch = batch.map_err(|e| DataFusionError::Execution(e.to_string()))?;
+        let id_col = col::<Int32Array>(&batch, 0);
+        let name_col = col::<StringArray>(&batch, 1);
+        let city_col = col::<StringArray>(&batch, 2);
+
+        for i in 0..batch.num_rows() {
+            rows.push((
+                id_col.value(i),
+                name_col.value(i).to_string(),
+                city_col.value(i).to_string(),
+            ));
+        }
+    }
+
+    assert_eq!(rows.len(), 3);
+    assert!(rows.contains(&(1, "Alice".to_string(), "NY".to_string())));
+    assert!(rows.contains(&(2, "Bob".to_string(), "SEA".to_string())));
+    assert!(rows.contains(&(3, "Carol".to_string(), "LA".to_string())));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn merge_orders_reports_count_and_inserts_new_rows() -> DFResult<()> {
+    let ns = setup_test_context().await?;
+
+    let df = ns.ctx.execute(
+        "MERGE INTO retail.sales.orders AS t \
+         USING wholesale.sales2.orders2 AS s \
+         ON t.order_id = s.order_id \
+         WHEN MATCHED THEN UPDATE SET amount = s.amount \
+         WHEN NOT MATCHED THEN INSERT (order_id, customer_id, amount) VALUES (s.order_id, s.customer_id, s.amount)",
+    )
+    .await
+    .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+
+    let batches = df
+        .collect()
+        .await
+        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+    assert_eq!(batches.len(), 1);
+
+    let batch = &batches[0];
+    assert_eq!(batch.num_columns(), 1);
+    assert_eq!(batch.num_rows(), 1);
+
+    let count_col = col::<Int64Array>(batch, 0);
+    assert_eq!(count_col.value(0), 2);
+
+    let orders_path = ns
+        .root_dir
+        .path()
+        .join("retail$sales$orders.lance");
+    let orders_uri = orders_path.to_string_lossy().to_string();
+
+    let dataset = Dataset::open(&orders_uri)
+        .await
+        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+
+    let mut scanner = dataset.scan();
+    scanner
+        .project(&["order_id", "customer_id", "amount"])
+        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+    let mut stream = scanner
+        .try_into_stream()
+        .await
+        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+
+    let mut rows = Vec::<(i32, i32, i32)>::new();
+    while let Some(batch) = stream.next().await {
+        let batch = batch.map_err(|e| DataFusionError::Execution(e.to_string()))?;
+        let order_id_col = col::<Int32Array>(&batch, 0);
+        let customer_id_col = col::<Int32Array>(&batch, 1);
+        let amount_col = col::<Int32Array>(&batch, 2);
+
+        for i in 0..batch.num_rows() {
+            rows.push((
+                order_id_col.value(i),
+                customer_id_col.value(i),
+                amount_col.value(i),
+            ));
+        }
+    }
+
+    assert_eq!(rows.len(), 5);
+    assert!(rows.contains(&(101, 1, 100)));
+    assert!(rows.contains(&(102, 2, 200)));
+    assert!(rows.contains(&(103, 3, 300)));
+    assert!(rows.contains(&(201, 1, 150)));
+    assert!(rows.contains(&(202, 2, 250)));
 
     Ok(())
 }

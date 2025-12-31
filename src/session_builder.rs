@@ -14,6 +14,7 @@ use datafusion::error::Result;
 use datafusion::execution::context::{SessionConfig, SessionContext};
 
 use crate::catalog::LanceCatalogProviderList;
+use crate::dml::LanceSession;
 use crate::namespace::Namespace;
 use crate::LanceCatalogProvider;
 
@@ -60,7 +61,7 @@ impl SessionBuilder {
     }
 
     /// Build a [`SessionContext`] with all configured namespaces.
-    pub async fn build(self) -> Result<SessionContext> {
+    pub async fn build(self) -> Result<LanceSession> {
         let ctx = if let Some(config) = self.config {
             SessionContext::new_with_config(config)
         } else {
@@ -79,6 +80,6 @@ impl SessionBuilder {
             );
         }
 
-        Ok(ctx)
+        Ok(LanceSession::new(ctx))
     }
 }

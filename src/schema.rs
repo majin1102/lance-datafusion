@@ -41,12 +41,6 @@ impl LanceSchemaProvider {
         })
     }
 
-    fn table_id(&self, table: &str) -> Vec<String> {
-        let mut id = self.namespace.id();
-        id.push(table.to_string());
-        id
-    }
-
     async fn load_and_cache_table(
         &self,
         table_name: &str,

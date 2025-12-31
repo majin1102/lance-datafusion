@@ -36,17 +36,14 @@ pub struct LanceCatalogProviderList {
 
 impl LanceCatalogProviderList {
     pub async fn try_new(namespace: Namespace) -> Result<Self> {
-        let catalogs = DashMap::new();
-        for child_namespace in namespace.children().await?.into_iter() {
-            let catalog_name = child_namespace.name().to_string();
-            let catalog_provider = Arc::new(LanceCatalogProvider::try_new(child_namespace).await?);
-            catalogs.insert(catalog_name, catalog_provider as Arc<dyn CatalogProvider>);
-        }
+        let catalogs = fetch_catalogs(&namespace).await?;
+        Ok(Self { namespace, catalogs })
+    }
 
-        Ok(Self {
-            namespace,
-            catalogs,
-        })
+    pub async fn refresh(&mut self) -> Result<()> {
+        let catalogs = fetch_catalogs(&self.namespace).await?;
+        self.catalogs = catalogs;
+        Ok(())
     }
 }
 
@@ -91,14 +88,14 @@ pub struct LanceCatalogProvider {
 
 impl LanceCatalogProvider {
     pub async fn try_new(namespace: Namespace) -> Result<Self> {
-        let schemas = DashMap::new();
-        for child_namespace in namespace.children().await?.into_iter() {
-            let schema_name = child_namespace.name().to_string();
-            let schema_provider = Arc::new(LanceSchemaProvider::try_new(child_namespace).await?);
-            schemas.insert(schema_name, schema_provider as Arc<dyn SchemaProvider>);
-        }
-
+        let schemas = fetch_schemas(&namespace).await?;
         Ok(Self { namespace, schemas })
+    }
+
+    pub async fn refresh(&mut self) -> Result<()> {
+        let schemas = fetch_schemas(&self.namespace).await?;
+        self.schemas = schemas;
+        Ok(())
     }
 }
 
@@ -129,4 +126,24 @@ impl CatalogProvider for LanceCatalogProvider {
     ) -> Result<Option<Arc<dyn SchemaProvider>>> {
         Ok(self.schemas.insert(name.to_string(), schema))
     }
+}
+
+pub async fn fetch_catalogs(namespace: &Namespace) -> Result<DashMap<String, Arc<dyn CatalogProvider>>> {
+    let catalogs = DashMap::new();
+    for child_namespace in namespace.children().await?.into_iter() {
+        let catalog_name = child_namespace.name().to_string();
+        let catalog_provider = Arc::new(LanceCatalogProvider::try_new(child_namespace).await?);
+        catalogs.insert(catalog_name, catalog_provider as Arc<dyn CatalogProvider>);
+    }
+    Ok(catalogs)
+}
+
+pub async fn fetch_schemas(namespace: &Namespace) -> Result<DashMap<String, Arc<dyn SchemaProvider>>> {
+    let schemas = DashMap::new();
+    for child_namespace in namespace.children().await?.into_iter() {
+        let schema_name = child_namespace.name().to_string();
+        let schema_provider = Arc::new(LanceSchemaProvider::try_new(child_namespace).await?);
+        schemas.insert(schema_name, schema_provider as Arc<dyn SchemaProvider>);
+    }
+    Ok(schemas)
 }
