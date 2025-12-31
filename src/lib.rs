@@ -6,7 +6,7 @@
 //! integration while delegating table IO to Lance datasets.
 
 pub mod catalog;
-pub mod dml;
+pub mod dml_extensions;
 pub mod error;
 pub mod namespace;
 pub mod physical_plan;
@@ -16,6 +16,7 @@ pub mod table;
 pub mod task_writer;
 
 pub use catalog::{LanceCatalogProvider, LanceCatalogProviderList};
+pub use dml_extensions as dml;
 pub use namespace::Namespace;
 pub use schema::LanceSchemaProvider;
 pub use session_builder::SessionBuilder;

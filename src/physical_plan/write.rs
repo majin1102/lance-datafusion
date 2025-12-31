@@ -16,7 +16,7 @@ use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use arrow_array::UInt64Array;
+use arrow_array::Int64Array;
 use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::error::{DataFusionError, Result as DFResult};
@@ -46,7 +46,7 @@ use crate::error::to_datafusion_error;
 /// The output schema therefore always has the shape:
 ///
 /// ```text
-/// count: UInt64
+/// count: Int64
 /// ```
 #[derive(Debug)]
 pub struct LanceInsertExec {
@@ -54,7 +54,7 @@ pub struct LanceInsertExec {
     input: Arc<dyn ExecutionPlan>,
     /// Target dataset URI.
     table_uri: String,
-    /// Output schema: single `count: UInt64` column.
+    /// Output schema: single `count: Int64` column.
     schema: ArrowSchemaRef,
     plan_properties: PlanProperties,
 }
@@ -64,7 +64,7 @@ impl LanceInsertExec {
         let df_schema = datafusion::arrow::datatypes::Schema::new(vec![
             datafusion::arrow::datatypes::Field::new(
                 "count",
-                datafusion::arrow::datatypes::DataType::UInt64,
+                datafusion::arrow::datatypes::DataType::Int64,
                 false,
             ),
         ]);
@@ -96,7 +96,7 @@ impl LanceInsertExec {
         // Collect all input batches.
         let batches: Vec<RecordBatch> = input_stream.try_collect().await?;
 
-        let inserted_rows: u64 = batches.iter().map(|b| b.num_rows() as u64).sum();
+        let inserted_rows: i64 = batches.iter().map(|b| b.num_rows() as i64).sum();
 
         if inserted_rows > 0 {
             // Configure an append into the target URI using Lance's insert builder.
@@ -113,7 +113,7 @@ impl LanceInsertExec {
         }
 
         // Produce a single-row count batch, even if 0 rows were inserted.
-        let count_array = UInt64Array::from(vec![inserted_rows]);
+        let count_array = Int64Array::from(vec![inserted_rows]);
         let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(count_array) as _])
             .map_err(to_datafusion_error)?;
 
