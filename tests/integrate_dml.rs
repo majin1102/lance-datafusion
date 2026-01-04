@@ -2,305 +2,27 @@
 
 use std::sync::Arc;
 
-
-use arrow_array::{Int32Array, Int64Array, RecordBatch, RecordBatchIterator, StringArray};
-use arrow_schema::{DataType, Field, Schema};
+use arrow_array::{Int32Array, Int64Array, RecordBatch, StringArray};
 use datafusion::error::{DataFusionError, Result};
 use futures::StreamExt;
-use lance::dataset::{WriteMode, WriteParams};
-use lance::Dataset;
 use lance::dataset::builder::DatasetBuilder;
-use lance_datafusion::{Namespace, SessionBuilder};
-use lance_namespace::models::{CreateNamespaceRequest, DescribeTableRequest};
-use lance_namespace::LanceNamespace;
-use lance_namespace_impls::DirectoryNamespaceBuilder;
-use tempfile::TempDir;
-use lance_datafusion::dml::LanceSession;
+use lance::Dataset;
 
-struct TestSession {
-    _root_dir: TempDir,
-    _extra_dir: TempDir,
-    root_ns: Arc<dyn LanceNamespace>,
-    session: LanceSession,
-}
+mod setup;
+
+use setup::TestSession;
 
 fn col<T: 'static>(batch: &RecordBatch, idx: usize) -> &T {
     batch.column(idx).as_any().downcast_ref::<T>().unwrap()
 }
 
-fn customers_data() -> (Arc<Schema>, RecordBatch) {
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("customer_id", DataType::Int32, false),
-        Field::new("name", DataType::Utf8, false),
-        Field::new("city", DataType::Utf8, false),
-    ]));
-
-    let customer_ids = Int32Array::from(vec![1, 2, 3]);
-    let names = StringArray::from(vec!["Alice", "Bob", "Carol"]);
-    let cities = StringArray::from(vec!["NY", "SF", "LA"]);
-
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(customer_ids), Arc::new(names), Arc::new(cities)],
-    )
-    .unwrap();
-
-    (schema, batch)
-}
-
-fn orders_data() -> (Arc<Schema>, RecordBatch) {
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("order_id", DataType::Int32, false),
-        Field::new("customer_id", DataType::Int32, false),
-        Field::new("amount", DataType::Int32, false),
-    ]));
-
-    let order_ids = Int32Array::from(vec![101, 102, 103]);
-    let customer_ids = Int32Array::from(vec![1, 2, 3]);
-    let amounts = Int32Array::from(vec![100, 200, 300]);
-
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(order_ids),
-            Arc::new(customer_ids),
-            Arc::new(amounts),
-        ],
-    )
-    .unwrap();
-
-    (schema, batch)
-}
-
-fn orders2_data() -> (Arc<Schema>, RecordBatch) {
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("order_id", DataType::Int32, false),
-        Field::new("customer_id", DataType::Int32, false),
-        Field::new("amount", DataType::Int32, false),
-    ]));
-
-    let order_ids = Int32Array::from(vec![201, 202]);
-    let customer_ids = Int32Array::from(vec![1, 2]);
-    let amounts = Int32Array::from(vec![150, 250]);
-
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(order_ids),
-            Arc::new(customer_ids),
-            Arc::new(amounts),
-        ],
-    )
-    .unwrap();
-
-    (schema, batch)
-}
-
-fn customers_dim_data() -> (Arc<Schema>, RecordBatch) {
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("customer_id", DataType::Int32, false),
-        Field::new("segment", DataType::Utf8, false),
-    ]));
-
-    let customer_ids = Int32Array::from(vec![1, 2, 3]);
-    let segments = StringArray::from(vec!["Silver", "Gold", "Platinum"]);
-
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(customer_ids), Arc::new(segments)],
-    )
-    .unwrap();
-
-    (schema, batch)
-}
-
-fn empty_high_value_orders() -> (Arc<Schema>, RecordBatch) {
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Int32, false),
-        Field::new("name", DataType::Utf8, false),
-        Field::new("amount", DataType::Int32, false),
-    ]));
-
-    let ids = Int32Array::from(Vec::<i32>::new());
-    let names = StringArray::from(Vec::<&str>::new());
-    let amounts = Int32Array::from(Vec::<i32>::new());
-
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(ids), Arc::new(names), Arc::new(amounts)],
-    )
-    .unwrap();
-
-    (schema, batch)
-}
-
-async fn write_table(
-    dir: &TempDir,
-    file_name: &str,
-    schema: Arc<Schema>,
-    batch: RecordBatch,
-) -> Result<()> {
-    let full_path = dir.path().join(file_name);
-    if let Some(parent) = full_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    let uri = full_path.to_str().unwrap().to_string();
-    let reader = RecordBatchIterator::new(vec![Ok(batch)], schema);
-    let write_params = WriteParams {
-        mode: WriteMode::Create,
-        ..Default::default()
-    };
-
-    Dataset::write(reader, &uri, Some(write_params))
-        .await
-        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-
-    Ok(())
-}
-
-async fn setup_context() -> Result<TestSession> {
-    let root_dir = TempDir::new()?;
-    let extra_dir = TempDir::new()?;
-
-    let (customers_schema, customers_batch) = customers_data();
-    write_table(
-        &root_dir,
-        "retail$sales$customers.lance",
-        customers_schema,
-        customers_batch,
-    )
-    .await?;
-
-    let (orders_schema, orders_batch) = orders_data();
-    write_table(
-        &root_dir,
-        "retail$sales$orders.lance",
-        orders_schema,
-        orders_batch,
-    )
-    .await?;
-
-    let (orders2_schema, orders2_batch) = orders2_data();
-    write_table(
-        &root_dir,
-        "wholesale$sales2$orders2.lance",
-        orders2_schema,
-        orders2_batch,
-    )
-    .await?;
-
-    let (high_value_schema, high_value_batch) = empty_high_value_orders();
-    write_table(
-        &root_dir,
-        "retail$sales$high_value_orders.lance",
-        high_value_schema,
-        high_value_batch,
-    )
-    .await?;
-
-    let (dim_schema, dim_batch) = customers_dim_data();
-    write_table(
-        &extra_dir,
-        "crm$dim$customers_dim.lance",
-        dim_schema,
-        dim_batch,
-    )
-    .await?;
-
-    let root_path = root_dir.path().to_string_lossy().to_string();
-    let root_dir_ns = DirectoryNamespaceBuilder::new(root_path)
-        .manifest_enabled(true)
-        .dir_listing_enabled(true)
-        .build()
-        .await
-        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-
-    let extra_path = extra_dir.path().to_string_lossy().to_string();
-    let extra_dir_ns = DirectoryNamespaceBuilder::new(extra_path)
-        .manifest_enabled(true)
-        .dir_listing_enabled(true)
-        .build()
-        .await
-        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-
-    let mut create_retail = CreateNamespaceRequest::new();
-    create_retail.id = Some(vec!["retail".to_string()]);
-    root_dir_ns
-        .create_namespace(create_retail)
-        .await
-        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-
-    let mut create_sales = CreateNamespaceRequest::new();
-    create_sales.id = Some(vec!["retail".to_string(), "sales".to_string()]);
-    root_dir_ns
-        .create_namespace(create_sales)
-        .await
-        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-
-    let mut create_wholesale = CreateNamespaceRequest::new();
-    create_wholesale.id = Some(vec!["wholesale".to_string()]);
-    root_dir_ns
-        .create_namespace(create_wholesale)
-        .await
-        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-
-    let mut create_sales2 = CreateNamespaceRequest::new();
-    create_sales2.id = Some(vec!["wholesale".to_string(), "sales2".to_string()]);
-    root_dir_ns
-        .create_namespace(create_sales2)
-        .await
-        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-
-    let mut create_crm = CreateNamespaceRequest::new();
-    create_crm.id = Some(vec!["crm".to_string()]);
-    extra_dir_ns
-        .create_namespace(create_crm)
-        .await
-        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-
-    let mut create_dim = CreateNamespaceRequest::new();
-    create_dim.id = Some(vec!["crm".to_string(), "dim".to_string()]);
-    extra_dir_ns
-        .create_namespace(create_dim)
-        .await
-        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-
-    root_dir_ns
-        .migrate()
-        .await
-        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-
-    extra_dir_ns
-        .migrate()
-        .await
-        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-
-    let root_ns: Arc<dyn LanceNamespace> = Arc::new(root_dir_ns);
-    let extra_ns: Arc<dyn LanceNamespace> = Arc::new(extra_dir_ns);
-
-    let session = SessionBuilder::new()
-        .with_root(Namespace::from_root(Arc::clone(&root_ns)))
-        .add_catalog(
-            "crm",
-            Namespace::from_namespace(Arc::clone(&extra_ns), vec!["crm".to_string()]),
-        )
-        .build()
-        .await?;
-
-    Ok(TestSession {
-        _root_dir: root_dir,
-        _extra_dir: extra_dir,
-        root_ns,
-        session,
-    })
-}
 
 #[tokio::test]
 async fn join_within_retail() -> Result<()> {
-    let context = setup_context().await?;
+    let (_root_dir, _extra_dir, context) = setup::make_temp_env().await?;
 
-    let df = context.session
+    let df = context
+        .session
         .sql(
             "SELECT customers.name, orders.amount \
              FROM retail.sales.customers customers \
@@ -325,9 +47,10 @@ async fn join_within_retail() -> Result<()> {
 
 #[tokio::test]
 async fn join_across_root_catalogs() -> Result<()> {
-    let context = setup_context().await?;
+    let (_root_dir, _extra_dir, context) = setup::make_temp_env().await?;
 
-    let df = context.session
+    let df = context
+        .session
         .sql(
             "SELECT c.name, o2.amount \
              FROM retail.sales.customers c \
@@ -352,9 +75,10 @@ async fn join_across_root_catalogs() -> Result<()> {
 
 #[tokio::test]
 async fn join_across_catalogs() -> Result<()> {
-    let context = setup_context().await?;
+    let (_root_dir, _extra_dir, context) = setup::make_temp_env().await?;
 
-    let df = context.session
+    let df = context
+        .session
         .sql(
             "SELECT customers.name, dim.segment \
              FROM retail.sales.customers customers \
@@ -379,9 +103,10 @@ async fn join_across_catalogs() -> Result<()> {
 
 #[tokio::test]
 async fn aggregation_city_totals() -> Result<()> {
-    let context = setup_context().await?;
+    let (_root_dir, _extra_dir, context) = setup::make_temp_env().await?;
 
-    let df = context.session
+    let df = context
+        .session
         .sql(
             "SELECT city, SUM(amount) AS total \
              FROM retail.sales.orders o \
@@ -413,9 +138,10 @@ async fn aggregation_city_totals() -> Result<()> {
 
 #[tokio::test]
 async fn cte_view_customer_orders() -> Result<()> {
-    let context = setup_context().await?;
+    let (_root_dir, _extra_dir, context) = setup::make_temp_env().await?;
 
-    let df = context.session
+    let df = context
+        .session
         .sql(
             "WITH customer_orders AS ( \
                  SELECT c.customer_id, c.name, o.order_id, o.amount \
@@ -444,29 +170,24 @@ async fn cte_view_customer_orders() -> Result<()> {
 
 #[tokio::test]
 async fn insert_into_select_high_value() -> Result<()> {
-    let context = setup_context().await?;
+    let (_root_dir, _extra_dir, context) = setup::make_temp_env().await?;
 
-    let df = context.session.sql(
-        "INSERT INTO retail.sales.high_value_orders \
-         SELECT c.customer_id AS id, c.name, o.amount \
-         FROM retail.sales.customers c \
-         JOIN retail.sales.orders o \
-           ON c.customer_id = o.customer_id \
-         WHERE o.amount >= 200",
-    )
-    .await
-    .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+    let df = context
+        .session
+        .sql(
+            "INSERT INTO retail.sales.high_value_orders \
+             SELECT c.customer_id AS id, c.name, o.amount \
+             FROM retail.sales.customers c \
+             JOIN retail.sales.orders o \
+               ON c.customer_id = o.customer_id \
+             WHERE o.amount >= 200",
+        )
+        .await
+        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
 
     df.collect()
         .await
         .map_err(|e| DataFusionError::Execution(e.to_string()))?;
-
-    let mut describe_req = DescribeTableRequest::new();
-    describe_req.id = Some(vec![
-        "retail".to_string(),
-        "sales".to_string(),
-        "high_value_orders".to_string(),
-    ]);
 
     let dataset = DatasetBuilder::from_namespace(
         Arc::clone(&context.root_ns),
@@ -477,9 +198,9 @@ async fn insert_into_select_high_value() -> Result<()> {
         ],
         false,
     )
-        .await?
-        .load()
-        .await?;
+    .await?
+    .load()
+    .await?;
 
     let mut scanner = dataset.scan();
     scanner
