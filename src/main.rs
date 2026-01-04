@@ -83,15 +83,13 @@ struct LanceNamespaceConfig {
 
 #[tokio::main]
 async fn main() {
-    if let Err(err) = run().await {
+    if let Err(err) = run_cli(CliArgs::parse()).await {
         eprintln!("Error: {err:?}");
         std::process::exit(1);
     }
 }
 
-async fn run() -> Result<()> {
-    let args = CliArgs::parse();
-
+async fn run_cli(args: CliArgs) -> Result<()> {
     // Load configuration from YAML and --conf
     let file_kv = if let Some(ref path) = args.config {
         load_yaml_key_values(path)
@@ -111,12 +109,7 @@ async fn run() -> Result<()> {
     // the underlying SessionContext for datafusion-cli exec functions.
     let session = build_lance_session(lance_cfg, session_config).await?;
 
-    let mut print_options = PrintOptions {
-        format: args.format,
-        quiet: args.quiet,
-        maxrows: args.maxrows,
-        color: args.color,
-    };
+    let mut print_options = build_print_options(&args);
 
     let ctx = session.context();
 
@@ -226,6 +219,15 @@ fn merge_maps(
         base.insert(k, v);
     }
     base
+}
+
+fn build_print_options(args: &CliArgs) -> PrintOptions {
+    PrintOptions {
+        format: args.format,
+        quiet: args.quiet,
+        maxrows: args.maxrows,
+        color: args.color,
+    }
 }
 
 fn partition_lance_and_df_options(
