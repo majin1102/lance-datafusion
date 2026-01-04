@@ -275,10 +275,10 @@ fn parse_lance_namespace_config(kv: &HashMap<String, String>) -> Result<Option<L
     if root_type.is_some() || root_path.is_some() {
         let t = root_type.unwrap_or_else(|| "directory".to_string());
         if !t.eq_ignore_ascii_case("directory") {
-            bail!("lance.root.type='{t}' 当前未支持（仅支持 directory）");
+            bail!("lance.root.type='{t}' is not supported (only 'directory' is currently supported)");
         }
         let path = root_path.ok_or_else(|| anyhow::anyhow!(
-            "lance.root.type 已配置但缺少 lance.root.path"
+            "lance.root.type is set but 'lance.root.path' is missing"
         ))?;
         cfg.root = Some(DirectoryNamespaceConfig { path });
     }
@@ -297,11 +297,11 @@ fn parse_lance_namespace_config(kv: &HashMap<String, String>) -> Result<Option<L
             .unwrap_or_else(|| "directory".to_string());
         if !t.eq_ignore_ascii_case("directory") {
             bail!(
-                "lance.catalog.{name}.type='{t}' 当前未支持（仅支持 directory）"
+                "lance.catalog.{name}.type='{t}' is not supported (only 'directory' is currently supported)"
             );
         }
         let path = catalog_paths.get(&name).ok_or_else(|| {
-            anyhow::anyhow!("lance.catalog.{name}.type 已配置但缺少 lance.catalog.{name}.path")
+            anyhow::anyhow!("lance.catalog.{name}.type is set but 'lance.catalog.{name}.path' is missing")
         })?;
         cfg
             .catalogs
@@ -388,7 +388,7 @@ fn split_statements(sql: &str) -> Vec<String> {
 
 async fn run_repl(engine: &Engine, format: OutputFormat) -> Result<()> {
     println!("Lance DataFusion CLI");
-    println!("输入 SQL，以分号 ';' 结束；输入 'quit' 或 'exit' 退出。");
+    println!("Enter SQL terminated by ';'. Type 'quit' or 'exit' to leave.");
 
     let mut buffer = String::new();
 
