@@ -189,6 +189,53 @@ async fn yaml_root_and_catalog_select() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn yaml_crm_catalog_select() -> Result<()> {
+    let root_dir = TempDir::new()?;
+    let extra_dir = TempDir::new()?;
+
+    prepare_lance_directories(&root_dir, &extra_dir).await?;
+
+    // Write YAML config
+    let yaml = format!(
+        concat!(
+            "lance.root.type: directory\n",
+            "lance.root.path: {}\n",
+            "lance.catalog.crm.type: directory\n",
+            "lance.catalog.crm.path: {}\n",
+        ),
+        root_dir.path().to_string_lossy(),
+        extra_dir.path().to_string_lossy(),
+    );
+
+    let yaml_file = tempfile::NamedTempFile::new()?;
+    std::fs::write(yaml_file.path(), yaml)?;
+
+    let cli = cli_bin();
+
+    let output = Command::new(cli)
+        .arg("--config")
+        .arg(yaml_file.path())
+        .arg("--format")
+        .arg("csv")
+        .arg("--command")
+        .arg("SELECT segment FROM crm.dim.customers_dim WHERE customer_id = 3;")
+        .output()
+        .expect("failed to run CLI");
+
+    assert!(
+        output.status.success(),
+        "CLI failed: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("segment"));
+    assert!(stdout.contains("Platinum"));
+
+    Ok(())
+}
+
 #[test]
 fn command_mode_simple_select() -> Result<()> {
     let cli = cli_bin();

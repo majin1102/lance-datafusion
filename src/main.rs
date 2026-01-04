@@ -324,6 +324,17 @@ fn build_session_config(df_options: &HashMap<String, String>) -> Result<SessionC
         .with_context(|| "failed to build DataFusion SessionConfig from key/value options".to_string())
 }
 
+async fn build_directory_ns_arc(path: &str) -> Result<Arc<dyn LanceNamespace>> {
+    let ns_impl = DirectoryNamespaceBuilder::new(path.to_string())
+        .manifest_enabled(true)
+        .dir_listing_enabled(true)
+        .build()
+        .await
+        .with_context(|| format!("failed to build directory namespace for '{path}'"))?;
+
+    Ok(Arc::new(ns_impl))
+}
+
 async fn build_lance_session(
     lance_cfg: Option<LanceNamespaceConfig>,
     session_config: SessionConfig,
@@ -332,29 +343,22 @@ async fn build_lance_session(
 
     if let Some(cfg) = lance_cfg {
         if let Some(root) = cfg.root {
-            let ns = build_directory_namespace(&root.path).await?;
-            builder = builder.with_root(ns);
+            let root_ns = build_directory_ns_arc(&root.path).await?;
+            builder = builder.with_root(Namespace::from_root(Arc::clone(&root_ns)));
         }
 
         for (catalog_name, ns_cfg) in cfg.catalogs {
-            let ns = build_directory_namespace(&ns_cfg.path).await?;
-            println!("add catalog: {}", catalog_name);
+            let catalog_ns = build_directory_ns_arc(&ns_cfg.path).await?;
+            // Anchor the catalog at the child namespace so `catalog.schema.table`
+            // resolves correctly (e.g. crm.dim.* under the `crm` catalog).
+            let ns = Namespace::from_namespace(
+                Arc::clone(&catalog_ns),
+                vec![catalog_name.clone()],
+            );
             builder = builder.add_catalog(&catalog_name, ns);
         }
     }
 
     let session = builder.build().await?;
     Ok(session)
-}
-
-async fn build_directory_namespace(path: &str) -> Result<Namespace> {
-    let ns_impl = DirectoryNamespaceBuilder::new(path.to_string())
-        .manifest_enabled(true)
-        .dir_listing_enabled(true)
-        .build()
-        .await
-        .with_context(|| format!("failed to build directory namespace for '{path}'"))?;
-
-    let ns: Arc<dyn LanceNamespace> = Arc::new(ns_impl);
-    Ok(Namespace::from_root(ns))
 }
