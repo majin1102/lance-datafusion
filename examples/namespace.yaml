@@ -1,10 +1,13 @@
-# 示例 Lance 命名空间配置（目录型）
-# 仅用于演示 CLI 的 --config 加载方式
+# Example Lance namespace configuration (directory type)
+# Demonstrates CLI --config loading
 
-# 根命名空间：动态 CatalogProviderList
-lance.root.type: directory
-lance.root.path: /tmp/lance_test_root
+# Root namespace: dynamic CatalogProviderList
+lance.namespace.root.type: directory
+lance.namespace.root.path: /tmp/lance_test_root
+# Optional root id; empty string means using the namespace root
+# lance.namespace.root.id: ""
 
-# 额外命名 catalog：crm
-lance.catalog.crm.type: directory
-lance.catalog.crm.path: /tmp/lance_test_extra
+# Additional named catalog: crm
+lance.namespace.catalog.crm.type: directory
+lance.namespace.catalog.crm.path: /tmp/lance_test_extra/crm
+lance.namespace.catalog.crm.id: crm

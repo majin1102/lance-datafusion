@@ -152,10 +152,11 @@ async fn yaml_root_and_catalog_select() -> Result<()> {
     // Write YAML config
     let yaml = format!(
         concat!(
-            "lance.root.type: directory\n",
-            "lance.root.path: {}\n",
-            "lance.catalog.crm.type: directory\n",
-            "lance.catalog.crm.path: {}\n",
+            "lance.namespace.root.type: directory\n",
+            "lance.namespace.root.path: {}\n",
+            "lance.namespace.catalog.crm.type: directory\n",
+            "lance.namespace.catalog.crm.path: {}\n",
+            "lance.namespace.catalog.crm.id: crm\n",
         ),
         root_dir.path().to_string_lossy(),
         extra_dir.path().to_string_lossy(),
@@ -190,7 +191,7 @@ async fn yaml_root_and_catalog_select() -> Result<()> {
 }
 
 #[tokio::test]
-async fn yaml_crm_catalog_select() -> Result<()> {
+async fn yaml_namespace_crm_select() -> Result<()> {
     let root_dir = TempDir::new()?;
     let extra_dir = TempDir::new()?;
 
@@ -199,10 +200,11 @@ async fn yaml_crm_catalog_select() -> Result<()> {
     // Write YAML config
     let yaml = format!(
         concat!(
-            "lance.root.type: directory\n",
-            "lance.root.path: {}\n",
-            "lance.catalog.crm.type: directory\n",
-            "lance.catalog.crm.path: {}\n",
+            "lance.namespace.root.type: directory\n",
+            "lance.namespace.root.path: {}\n",
+            "lance.namespace.catalog.crm.type: directory\n",
+            "lance.namespace.catalog.crm.path: {}\n",
+            "lance.namespace.catalog.crm.id: crm\n",
         ),
         root_dir.path().to_string_lossy(),
         extra_dir.path().to_string_lossy(),

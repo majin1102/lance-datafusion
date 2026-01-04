@@ -133,28 +133,30 @@ cargo run -- \
   --format table
 ```
 
-The YAML is a flat key/value mapping; only keys prefixed with `lance.*` are parsed:
+The YAML is a flat key/value mapping; only keys prefixed with `lance.namespace.*` are parsed:
 
 ```yaml
-lance.root.type: directory
-lance.root.path: /path/to/lance_root
+lance.namespace.root.type: directory
+lance.namespace.root.path: /path/to/lance_root
+lance.namespace.root.id: ""               # optional, defaults to empty string
 
-lance.catalog.crm.type: directory
-lance.catalog.crm.path: /path/to/crm_namespace
+lance.namespace.catalog.crm.type: directory
+lance.namespace.catalog.crm.path: /path/to/crm_namespace
+lance.namespace.catalog.crm.id: crm
 ```
 
 Meaning:
 
-- `lance.root.*`: root directory namespace. Registered via `SessionBuilder::with_root()` as a dynamic `LanceCatalogProviderList`, exposing top-level namespaces under the root as catalogs (e.g., `retail.sales.*`).
-- `lance.catalog.<name>.*`: additional directory-backed catalogs registered via `SessionBuilder::add_catalog()` (e.g., `crm.dim.*`).
+- `lance.namespace.root.*`: root directory namespace. Registered via `SessionBuilder::with_root()` as a dynamic `LanceCatalogProviderList`, exposing top-level namespaces under the root as catalogs (e.g., `retail.sales.*`).
+- `lance.namespace.catalog.<name>.*`: additional directory-backed catalogs registered via `SessionBuilder::add_catalog()` (e.g., `crm.dim.*`).
 
-When any `lance.*` settings are present, the CLI:
+When any `lance.namespace.*` settings are present, the CLI:
 
 1. Builds the corresponding directory `LanceNamespace` via `lance-namespace-impls::DirectoryNamespaceBuilder`.
 2. Uses `SessionBuilder` to create a `SessionContext` with `LanceCatalogProviderList` / `LanceCatalogProvider` registered.
 3. Executes SQL via `LanceSession` so `DELETE / UPDATE / MERGE` go through Lance DML extensions, while other statements use DataFusion's native path.
 
-If no `lance.*` settings are provided, the CLI constructs a default `SessionContext` and behaves like native DataFusion.
+If no `lance.namespace.*` settings are provided, the CLI constructs a default `SessionContext` and behaves like native DataFusion.
 
 ### 3. Command-line options
 
@@ -162,7 +164,7 @@ The CLI supports:
 
 - `--config <path>`: load a YAML configuration file (optional).
 - `--conf key=value`: additional settings; can be specified multiple times.
-  - Keys prefixed with `lance.*` are used for namespace configuration and override the same keys from YAML.
+  - Keys prefixed with `lance.namespace.*` are used for namespace configuration and override the same keys from YAML.
   - Other keys (e.g., `datafusion.execution.batch_size`) are forwarded to DataFusion `ConfigOptions`.
 - `-c, --command <SQL>`: execute one or more SQL statements and then exit (repeatable).
 - `-f, --file <path>`: execute SQL statements from files and then exit (repeatable).
@@ -178,7 +180,7 @@ cargo run -- --format csv \
 # Query on an existing Lance directory namespace
 cargo run -- \
   --config /path/to/namespace.yaml \
-  --conf lance.root.path=/data/lance_root \
+  --conf lance.namespace.root.path=/data/lance_root \
   --format json \
   --command "SELECT * FROM retail.sales.customers LIMIT 10;"
 ```

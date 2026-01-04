@@ -34,7 +34,7 @@ use lance_datafusion::{Namespace, SessionBuilder};
     version
 )]
 struct CliArgs {
-    /// Configuration key-value pairs, e.g. --conf lance.root.path=/data
+    /// Configuration key-value pairs, e.g. --conf lance.namespace.root.path=/data
     #[arg(long = "conf")]
     conf: Vec<String>,
 
@@ -71,6 +71,8 @@ struct CliArgs {
 #[derive(Debug, Clone)]
 struct DirectoryNamespaceConfig {
     path: String,
+    /// Namespace identifier segments, e.g. ["crm", "dim"]
+    id: Vec<String>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -156,10 +158,12 @@ fn parse_conf_args(args: &[String]) -> Result<HashMap<String, String>> {
 /// Expected structure is a flat mapping, e.g.:
 ///
 /// ```yaml
-/// lance.root.type: directory
-/// lance.root.path: /path/to/data
-/// lance.catalog.crm.type: directory
-/// lance.catalog.crm.path: /path/to/crm
+/// lance.namespace.root.type: directory
+/// lance.namespace.root.path: /path/to/data
+/// lance.namespace.root.id: ""            # optional, defaults to empty string
+/// lance.namespace.catalog.crm.type: directory
+/// lance.namespace.catalog.crm.path: /path/to/crm
+/// lance.namespace.catalog.crm.id: crm
 /// datafusion.execution.batch_size: 1024
 /// ```
 fn load_yaml_key_values(path: &Path) -> Result<HashMap<String, String>> {
@@ -203,6 +207,17 @@ fn yaml_scalar_to_string(value: &YamlValue) -> Option<String> {
     }
 }
 
+/// Parse a dot-separated namespace id string (e.g. "crm.dim") into segments.
+///
+/// Empty or whitespace-only strings yield an empty vector.
+fn parse_namespace_id(id: &str) -> Vec<String> {
+    id.split('.')
+        .map(|part| part.trim())
+        .filter(|part| !part.is_empty())
+        .map(|s| s.to_string())
+        .collect()
+}
+
 fn merge_maps(
     mut base: HashMap<String, String>,
     override_map: HashMap<String, String>,
@@ -239,17 +254,20 @@ fn parse_lance_namespace_config(
 
     let mut root_type: Option<String> = None;
     let mut root_path: Option<String> = None;
+    let mut root_id: Option<String> = None;
     let mut catalog_types: HashMap<String, String> = HashMap::new();
     let mut catalog_paths: HashMap<String, String> = HashMap::new();
+    let mut catalog_ids: HashMap<String, String> = HashMap::new();
 
     for (key, value) in kv {
-        if let Some(suffix) = key.strip_prefix("lance.root.") {
+        if let Some(suffix) = key.strip_prefix("lance.namespace.root.") {
             match suffix {
                 "type" => root_type = Some(value.clone()),
                 "path" => root_path = Some(value.clone()),
+                "id" => root_id = Some(value.clone()),
                 _ => {}
             }
-        } else if let Some(rest) = key.strip_prefix("lance.catalog.") {
+        } else if let Some(rest) = key.strip_prefix("lance.namespace.catalog.") {
             if let Some((name, attr)) = rest.split_once('.') {
                 match attr {
                     "type" => {
@@ -257,6 +275,9 @@ fn parse_lance_namespace_config(
                     }
                     "path" => {
                         catalog_paths.insert(name.to_string(), value.clone());
+                    }
+                    "id" => {
+                        catalog_ids.insert(name.to_string(), value.clone());
                     }
                     _ => {}
                 }
@@ -267,17 +288,23 @@ fn parse_lance_namespace_config(
     let mut cfg = LanceNamespaceConfig::default();
 
     // Root namespace
-    if root_type.is_some() || root_path.is_some() {
+    if root_type.is_some() || root_path.is_some() || root_id.is_some() {
         let t = root_type.unwrap_or_else(|| "directory".to_string());
         if !t.eq_ignore_ascii_case("directory") {
             bail!(
-                "lance.root.type='{t}' is not supported (only 'directory' is currently supported)"
+                "lance.namespace.root.type='{t}' is not supported (only 'directory' is currently supported)"
             );
         }
         let path = root_path.ok_or_else(|| {
-            anyhow::anyhow!("lance.root.type is set but 'lance.root.path' is missing")
+            anyhow::anyhow!(
+                "lance.namespace.root.path is required when root namespace is configured"
+            )
         })?;
-        cfg.root = Some(DirectoryNamespaceConfig { path });
+        let id = root_id
+            .as_deref()
+            .map(parse_namespace_id)
+            .unwrap_or_else(Vec::new);
+        cfg.root = Some(DirectoryNamespaceConfig { path, id });
     }
 
     // Named catalogs
@@ -285,6 +312,7 @@ fn parse_lance_namespace_config(
         .keys()
         .cloned()
         .chain(catalog_paths.keys().cloned())
+        .chain(catalog_ids.keys().cloned())
         .collect();
 
     for name in catalog_names {
@@ -294,16 +322,28 @@ fn parse_lance_namespace_config(
             .unwrap_or_else(|| "directory".to_string());
         if !t.eq_ignore_ascii_case("directory") {
             bail!(
-                "lance.catalog.{name}.type='{t}' is not supported (only 'directory' is currently supported)"
+                "lance.namespace.catalog.{name}.type='{t}' is not supported (only 'directory' is currently supported)"
             );
         }
         let path = catalog_paths.get(&name).ok_or_else(|| {
             anyhow::anyhow!(
-                "lance.catalog.{name}.type is set but 'lance.catalog.{name}.path' is missing"
+                "lance.namespace.catalog.{name}.path is required when catalog namespace is configured"
             )
         })?;
-        cfg.catalogs
-            .insert(name.clone(), DirectoryNamespaceConfig { path: path.clone() });
+        let id_str = catalog_ids.get(&name).ok_or_else(|| {
+            anyhow::anyhow!("lance.namespace.catalog.{name}.id is required")
+        })?;
+        let id = parse_namespace_id(id_str);
+        if id.is_empty() {
+            bail!("lance.namespace.catalog.{name}.id must not be empty");
+        }
+        cfg.catalogs.insert(
+            name.clone(),
+            DirectoryNamespaceConfig {
+                path: path.clone(),
+                id,
+            },
+        );
     }
 
     if cfg.root.is_none() && cfg.catalogs.is_empty() {
@@ -344,17 +384,17 @@ async fn build_lance_session(
     if let Some(cfg) = lance_cfg {
         if let Some(root) = cfg.root {
             let root_ns = build_directory_ns_arc(&root.path).await?;
-            builder = builder.with_root(Namespace::from_root(Arc::clone(&root_ns)));
+            let ns = if root.id.is_empty() {
+                Namespace::from_root(Arc::clone(&root_ns))
+            } else {
+                Namespace::from_namespace(Arc::clone(&root_ns), root.id.clone())
+            };
+            builder = builder.with_root(ns);
         }
 
         for (catalog_name, ns_cfg) in cfg.catalogs {
             let catalog_ns = build_directory_ns_arc(&ns_cfg.path).await?;
-            // Anchor the catalog at the child namespace so `catalog.schema.table`
-            // resolves correctly (e.g. crm.dim.* under the `crm` catalog).
-            let ns = Namespace::from_namespace(
-                Arc::clone(&catalog_ns),
-                vec![catalog_name.clone()],
-            );
+            let ns = Namespace::from_namespace(Arc::clone(&catalog_ns), ns_cfg.id.clone());
             builder = builder.add_catalog(&catalog_name, ns);
         }
     }
