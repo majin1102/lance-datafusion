@@ -315,7 +315,9 @@ fn parse_lance_namespace_config(
 
 fn build_session_config(df_options: &HashMap<String, String>) -> Result<SessionConfig> {
     if df_options.is_empty() {
-        return Ok(SessionConfig::new());
+        let config = SessionConfig::new()
+            .with_information_schema(true);
+        return Ok(config);
     }
 
     SessionConfig::from_string_hash_map(df_options)
@@ -336,6 +338,7 @@ async fn build_lance_session(
 
         for (catalog_name, ns_cfg) in cfg.catalogs {
             let ns = build_directory_namespace(&ns_cfg.path).await?;
+            println!("add catalog: {}", catalog_name);
             builder = builder.add_catalog(&catalog_name, ns);
         }
     }
