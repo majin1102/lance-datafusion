@@ -107,6 +107,87 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+## CLI 使用
+
+本 crate 同时提供一个可执行的 CLI，基于 DataFusion `SessionContext`，在启动时可选注入 Lance 命名空间能力（目录型 `DirectoryNamespace`）。
+
+### 1. 构建与运行
+
+在仓库根目录：
+
+```bash
+cargo build
+cargo run -- --help
+```
+
+编译后将生成 `lance-datafusion` 二进制，可直接作为 DataFusion CLI 使用。
+
+### 2. 通过 YAML 配置注入 Lance 命名空间
+
+CLI 支持通过 `--config` 加载 YAML 配置文件，并通过 `--conf` 传入额外配置：
+
+```bash
+# 使用 examples/namespace.yaml 中的目录型示例
+cargo run -- \
+  --config examples/namespace.yaml \
+  --format table
+```
+
+YAML 配置为扁平的 key/value 形式，仅解析 `lance.*` 前缀：
+
+```yaml
+lance.root.type: directory
+lance.root.path: /path/to/lance_root
+
+lance.catalog.crm.type: directory
+lance.catalog.crm.path: /path/to/crm_namespace
+```
+
+含义：
+
+- `lance.root.*`：根目录型命名空间，通过 `SessionBuilder::with_root()` 注册动态 `LanceCatalogProviderList`，暴露根下的顶层 namespace 作为 catalog（如 `retail.sales.*`）。
+- `lance.catalog.<name>.*`：额外目录型命名 catalog，通过 `SessionBuilder::add_catalog()` 注册为固定 catalog（如 `crm.dim.*`）。
+
+当存在任意 `lance.*` 配置时，CLI 会：
+
+1. 使用 `lance-namespace-impls::DirectoryNamespaceBuilder` 构建对应的目录型 `LanceNamespace`；
+2. 利用 `SessionBuilder` 构建带有 `LanceCatalogProviderList` / `LanceCatalogProvider` 的 `SessionContext`；
+3. 通过 `LanceSession` 执行 SQL，使 `DELETE / UPDATE / MERGE` 走 Lance DML 扩展，其余语句使用 DataFusion 原生执行路径。
+
+当用户未提供任何 `lance.*` 配置时，CLI 直接构建默认的 `SessionContext`，行为与原生 DataFusion 保持一致。
+
+### 3. 命令行参数
+
+CLI 支持以下主要参数：
+
+- `--config <path>`：加载 YAML 配置文件（可选）。
+- `--conf key=value`：附加配置，可多次使用；
+  - 以前缀 `lance.*` 的键用于命名空间配置，覆盖 YAML 中的同名键；
+  - 其他键（例如 `datafusion.execution.batch_size`）传递给 DataFusion `ConfigOptions`。
+- `-c, --command <SQL>`：执行一条或多条 SQL，然后退出（可多次使用）。
+- `-f, --file <path>`：从文件读取 SQL 脚本并执行，然后退出（可多次使用）。
+- `--format <table|csv|json>`：结果输出格式，默认 `table`。
+
+示例：
+
+```bash
+# 只使用 DataFusion 默认行为
+cargo run -- --format csv \
+  --command "SELECT 1 + 2 AS sum;"
+
+# 在已有的 Lance 目录命名空间上查询
+cargo run -- \
+  --config /path/to/namespace.yaml \
+  --conf lance.root.path=/data/lance_root \
+  --format json \
+  --command "SELECT * FROM retail.sales.customers LIMIT 10;"
+```
+
+键空间约定：
+
+- 仅支持目录型命名空间：`type=directory`；
+- 如配置 `type=service` 等其他类型，CLI 会报错：`当前未支持（仅支持 directory）`。
+
 ## Limitations and Future Work
 
 This is an initial implementation with several areas for improvement:
