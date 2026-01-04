@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::table::table_provider::LanceTableProvider;
 use arrow_array::{ArrayRef, Int64Array, RecordBatchIterator};
 use datafusion::dataframe::DataFrame;
 use datafusion::error::{DataFusionError, Result};
@@ -16,6 +15,7 @@ use datafusion_sql::sqlparser::parser::Parser;
 use datafusion_sql::TableReference;
 use lance::dataset::{Dataset, MergeInsertBuilder, UpdateBuilder, WhenMatched, WhenNotMatched};
 use std::sync::Arc;
+use crate::table_provider::LanceTableProvider;
 
 /// Extend DML capabilities of Datafusion against Lance tables.
 pub struct LanceSession {
