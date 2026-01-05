@@ -1,110 +1,139 @@
-# Lance DataFusion Catalog Provider
+# lance-datafusion
 
-This crate provides a `CatalogProvider` implementation for [Apache DataFusion](https://arrow.apache.org/datafusion/) that integrates with the Lance `LanceNamespace` trait. It allows you to expose Lance datasets as tables within a DataFusion `SessionContext` using a structured `catalog.schema.table` hierarchy.
+Lance integration with Apache DataFusion.
 
-## Features
+This crate provides providers and session helpers to integrate [Lance](httpshttps://github.com/lance-format/lance) with [Apache DataFusion](https://arrow.apache.org/datafusion/). It allows you to expose Lance datasets as tables within a DataFusion `SessionContext` using a structured `catalog.schema.table` hierarchy.
 
-- **Namespace as Schema**: Maps a `LanceNamespace` to a DataFusion `SchemaProvider`.
-- **Directory Namespace Support**: Easily register a directory of Lance datasets (e.g., `s3://bucket/data/`, `/path/to/data/`) as a schema.
-- **Dynamic Table Resolution**: Tables are resolved on-the-fly by calling `namespace.describe_table()` to get the dataset URI.
-- **Session Wrapper**: Provides a high-level `Session` API that wraps DataFusion's `SessionContext`, manages a `LanceCatalogProviderList`, and exposes a `use()` method to mount namespaces.
-- **Minimal DML Support**: Routes `DELETE`, `UPDATE`, and `MERGE INTO` statements through Lance's custom DML engine when using the `Session::sql` API.
+Key features include:
+- **Catalog Integration**: Exposes a `LanceNamespace` as a tree of catalogs, schemas, and tables that DataFusion can query.
+- **Session Builder**: A `SessionBuilder` API to easily construct a DataFusion `SessionContext` configured with Lance catalog providers.
+- **DML Extensions**: A `LanceSession` wrapper that routes DML statements (`DELETE`, `UPDATE`, `MERGE`, `INSERT INTO ... SELECT`) to Lance's write APIs, enabling SQL-based mutations on Lance datasets.
 
-## Usage
+## SQL Compatibility
 
-Here is a minimal example of how to register a directory of Lance datasets and query them using SQL.
+This crate integrates with DataFusion's SQL engine by providing table providers and a DML-aware session wrapper. SQL support is divided into two categories:
 
-### 1. Project Setup
+### DataFusion-Native Queries
 
-Add `lance-datafusion-catalog` to your `Cargo.toml` dependencies:
+All read-only queries are planned and executed by DataFusion's native engine. This crate enables this by registering `TableProvider` implementations that can scan Lance datasets. This includes the full breadth of DataFusion's query capabilities:
 
-```toml
-[dependencies]
-lance-datafusion-catalog = { git = "https://code.byted.org/emr-core/lance-datafusion.git", branch = "main" }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-```
+- `SELECT` statements, including projections, filters, and limits.
+- `JOIN` operations (e.g., `INNER JOIN`, `LEFT JOIN`).
+- Aggregations with `GROUP BY`.
+- `ORDER BY`.
+- Common Table Expressions (`WITH` clauses).
+- Window functions.
 
-### 2. Registering a Namespace
+### Lance DML Extensions
 
-The recommended way to mount namespaces is via the high-level `Session` API. It wraps a DataFusion `SessionContext` and manages a `LanceCatalogProviderList` for you.
+Write-oriented SQL statements are intercepted by the `LanceSession` and routed to this crate's DML engine, which in turn calls Lance's underlying write APIs. Support for these statements is a subset of the SQL standard and is continually evolving.
 
-Assume you have a directory `/path/to/my_data` containing a Lance dataset at `/path/to/my_data/foo.lance`.
+The following DML statements are handled by this crate's extensions:
+- `DELETE FROM ... WHERE ...`
+- `UPDATE ... SET ... WHERE ...`
+- `MERGE INTO ...` (upsert-style)
+- `INSERT INTO ... SELECT ...`
+
+Unsupported DML syntax will result in a `NotImplemented` error from DataFusion.
+
+### DDL and Management
+
+This crate does **not** provide support for SQL DDL statements (`CREATE TABLE`, `DROP TABLE`, etc.).
+
+## Quick Start
+
+The recommended way to start is by using the `SessionBuilder` to construct a `LanceSession`. This example mounts a directory at `/path/to/data` as the root namespace.
 
 ```rust
-use lance_datafusion_catalog::{NamespaceConfig, Session};
+use std::sync::Arc;
+use datafusion::error::Result;
+use lance_datafusion::{Namespace, SessionBuilder};
+use lance_namespace_impls::DirectoryNamespaceBuilder;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create a new Lance session with an underlying DataFusion SessionContext.
-    let session = Session::new();
+async fn main() -> Result<()> {
+    // 1. Build a Lance Namespace, for example from a directory.
+    // This will treat subdirectories as catalogs and schemas.
+    let root_ns_impl = DirectoryNamespaceBuilder::new("/path/to/data".to_string())
+        .manifest_enabled(true)
+        .dir_listing_enabled(true)
+        .build()
+        .await?;
+    let root_ns = Namespace::from_root(Arc::new(root_ns_impl));
 
-    // Mount the directory /path/to/my_data as the schema "default"
-    // under the default catalog "lance".
-    let ns = NamespaceConfig::for_directory("/path/to/my_data");
-    session.r#use(ns).await?;
+    // 2. Create a LanceSession using the SessionBuilder.
+    let session = SessionBuilder::new()
+        .with_root(root_ns)
+        .build()
+        .await?;
 
-    // Now you can query the 'foo' table as lance.default.foo.
+    // 3. Run a DataFusion-native SELECT query.
+    // Assumes a table exists at /path/to/data/retail/sales/orders.lance
     let df = session
-        .sql("SELECT * FROM lance.default.foo LIMIT 10")
+        .sql("SELECT * FROM retail.sales.orders LIMIT 10")
         .await?;
     df.show().await?;
 
+    // 4. Run a Lance DML extension query.
+    // The LanceSession::sql() method automatically routes DML.
+    let df_delete = session
+        .sql("DELETE FROM retail.sales.orders WHERE amount < 100")
+        .await?;
+
+    // DML queries return a DataFrame with a "count" column for affected rows.
+    df_delete.show().await?;
+
     Ok(())
 }
 ```
 
-### 3. Executing DML (DELETE / UPDATE / MERGE INTO)
+## CLI Usage
 
-When using the `Session` API, DML statements are routed automatically through Lance's custom engine when the SQL text starts with `DELETE`, `UPDATE`, or `MERGE`.
+This crate includes a command-line binary built from `src/main.rs`. The compiled executable is named `lance-datafusion` (derived from the Cargo package name), while the CLI help banner shows `lance-datafusion-cli` as the command name. You can run it directly or via `cargo run` during development.
 
-```rust
-use lance_datafusion_catalog::{NamespaceConfig, Session};
+### Development usage with `cargo run`
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let session = Session::new();
-    let ns = NamespaceConfig::for_directory("/path/to/my_data");
-    session.r#use(ns).await?;
+The examples below show how to pass the root namespace path via the `--conf` flag, using the key `lance.namespace.root.path`.
 
-    // Initial count
-    let initial_count = session
-        .sql("SELECT COUNT(*) FROM lance.default.foo")
-        .await?
-        .collect()
-        .await?;
-    println!("Initial count: {:?}", initial_count);
+**SELECT query (DataFusion native):**
+```bash
+cargo run -- --conf lance.namespace.root.path=/path/to/data -c "SELECT name, amount FROM retail.sales.orders WHERE amount >= 200"
+```
 
-    // Delete some rows
-    session
-        .sql("DELETE FROM lance.default.foo WHERE x >= 10")
-        .await?;
+**DELETE query (Lance DML extension):**
+```bash
+cargo run -- --conf lance.namespace.root.path=/path/to/data -c "DELETE FROM retail.sales.orders WHERE amount < 100"
+```
 
-    // Update some rows
-    session
-        .sql("UPDATE lance.default.foo SET x = x + 1 WHERE id BETWEEN 5 AND 9")
-        .await?;
+### Executing from a file (`-f`)
 
-    // Merge from another table (simplified example)
-    session
-        .sql(
-            "MERGE INTO lance.default.foo AS t \
-             USING lance.default.bar AS s \
-             ON t.id = s.id \
-             WHEN MATCHED THEN UPDATE SET x = s.x \
-             WHEN NOT MATCHED THEN INSERT (id, x) VALUES (s.id, s.x)",
-        )
-        .await?;
+Use the `-f` flag to execute one or more SQL statements from a file.
 
-    // Verify new count
-    let final_count = session
-        .sql("SELECT COUNT(*) FROM lance.default.foo")
-        .await?
-        .collect()
-        .await?;
-    println!("Final count: {:?}", final_count);
+```bash
+cargo run -- --conf lance.namespace.root.path=/path/to/data -f /path/to/query.sql
+```
 
-    Ok(())
-}
+### Interactive REPL
+
+Run the CLI without `-c` / `-f` to enter an interactive shell. In this mode, `SELECT` queries are handled by DataFusion, while DML statements (`DELETE`, `UPDATE`, `MERGE`, `INSERT INTO ... SELECT`) are automatically routed to the Lance DML handler.
+
+```bash
+cargo run -- --conf lance.namespace.root.path=/path/to/data
+```
+
+### Running the compiled binary
+
+After building, you can invoke the compiled executable directly:
+
+```bash
+cargo build
+
+# Debug binary
+./target/debug/lance-datafusion --conf lance.namespace.root.path=/path/to/data -c "SELECT name, amount FROM retail.sales.orders WHERE amount >= 200"
+
+# Release binary
+cargo build --release
+./target/release/lance-datafusion --conf lance.namespace.root.path=/path/to/data -c "DELETE FROM retail.sales.orders WHERE amount < 100"
 ```
 
 ## CLI Usage
@@ -192,9 +221,19 @@ Keyspace conventions:
 
 ## Limitations and Future Work
 
-This is an initial implementation with several areas for improvement:
+```bash
+./target/debug/lance-datafusion --config config.yaml -c "SELECT name, amount FROM retail.sales.orders WHERE amount >= 200"
+```
 
-- **DML Support**: Only a constrained subset of `DELETE`, `UPDATE`, and `MERGE INTO` statements are supported via the Lance SQL extensions. The implementation focuses on single-table DELETE, simple UPDATE without `FROM` / `RETURNING` / `ORDER BY` / `LIMIT`, and a minimal MERGE form (single equality join key, one WHEN MATCHED + one WHEN NOT MATCHED). INSERT statements continue to use DataFusion's native SQL path via `TableProvider::insert_into` and return a single `count` column. The long-term plan is to expand coverage and integrate more deeply with DataFusion's native DML handling.
-- **Async Catalog API**: The current implementation uses DataFusion's synchronous `CatalogProvider` and `SchemaProvider` traits. For namespaces with high-latency (e.g., remote services), this can block the query planner. Future work will involve implementing the `AsyncCatalogProvider` traits for better performance.
-- **View and UDF Placement**: There is currently no strategy for managing views or user-defined functions within the Lance catalog structure. This will be explored in future iterations.
-- **Table Listing**: `SchemaProvider::table_names()` is not yet implemented due to the synchronous nature of the API. Table discovery currently relies on direct lookups via `table()`.
+A minimal `config.yaml` might look like:
+
+```yaml
+lance.namespace.root.type: directory
+lance.namespace.root.path: /path/to/data
+# Optional: configure additional catalogs
+# lance.namespace.catalog.crm.type: directory
+# lance.namespace.catalog.crm.path: /path/to/crm
+# lance.namespace.catalog.crm.id: crm
+```
+
+CLI options whose keys start with `lance.` are interpreted as Lance namespace settings (such as the root path), while other keys (for example, `datafusion.execution.*`) are forwarded to DataFusion's `SessionConfig`. Values passed via `--conf` override values loaded from `--config`. 
