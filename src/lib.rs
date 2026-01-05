@@ -13,6 +13,7 @@ pub mod physical_plan;
 pub mod schema;
 pub mod session_builder;
 pub mod table_provider;
+pub mod url_factory;
 
 pub use catalog::{LanceCatalogProvider, LanceCatalogProviderList};
 pub use dml_extensions as dml;

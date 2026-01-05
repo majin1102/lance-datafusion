@@ -3513,6 +3513,7 @@ dependencies = [
  "dashmap",
  "datafusion",
  "datafusion-cli",
+ "datafusion-session",
  "datafusion-sql",
  "futures",
  "lance",
