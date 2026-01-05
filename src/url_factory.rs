@@ -32,10 +32,7 @@ impl MultiUrlTableFactory {
 
 #[async_trait]
 impl UrlTableFactory for MultiUrlTableFactory {
-    async fn try_new(
-        &self,
-        url: &str,
-    ) -> DataFusionResult<Option<Arc<dyn TableProvider>>> {
+    async fn try_new(&self, url: &str) -> DataFusionResult<Option<Arc<dyn TableProvider>>> {
         for factory in &self.factories {
             if let Some(provider) = factory.try_new(url).await? {
                 return Ok(Some(provider));
@@ -76,18 +73,13 @@ impl LanceUrlTableFactory {
 
 #[async_trait]
 impl UrlTableFactory for LanceUrlTableFactory {
-    async fn try_new(
-        &self,
-        url: &str,
-    ) -> DataFusionResult<Option<Arc<dyn TableProvider>>> {
+    async fn try_new(&self, url: &str) -> DataFusionResult<Option<Arc<dyn TableProvider>>> {
         // Only handle Lance URLs; let other factories handle the rest.
         if !url.ends_with(".lance") {
             return Ok(None);
         }
 
-        let dataset = Dataset::open(url)
-            .await
-            .map_err(to_datafusion_error)?;
+        let dataset = Dataset::open(url).await.map_err(to_datafusion_error)?;
         let provider = LanceTableProvider::new(dataset);
 
         Ok(Some(Arc::new(provider)))

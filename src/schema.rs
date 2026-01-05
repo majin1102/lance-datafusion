@@ -11,14 +11,14 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use crate::error::to_datafusion_error;
+use crate::namespace::Namespace;
+use crate::table_provider::LanceTableProvider;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use datafusion::catalog::SchemaProvider;
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
-use crate::error::to_datafusion_error;
-use crate::namespace::Namespace;
-use crate::table_provider::LanceTableProvider;
 
 /// Dynamic [`SchemaProvider`] backed directly by a [`LanceNamespace`].
 ///

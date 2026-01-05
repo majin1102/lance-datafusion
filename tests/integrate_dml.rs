@@ -237,10 +237,7 @@ async fn insert_into_select_high_value() -> Result<()> {
 async fn url_literal_select_customers_by_id() -> Result<()> {
     let env = setup_temp_env().await?;
 
-    let path = env
-        .root_dir
-        .path()
-        .join("retail$sales$customers.lance");
+    let path = env.root_dir.path().join("retail$sales$customers.lance");
 
     let sql = format!(
         "SELECT name FROM '{}' WHERE customer_id = 2",
@@ -263,10 +260,7 @@ async fn url_literal_select_customers_by_id() -> Result<()> {
 async fn url_literal_select_orders_by_amount() -> Result<()> {
     let env = setup_temp_env().await?;
 
-    let path = env
-        .root_dir
-        .path()
-        .join("retail$sales$orders.lance");
+    let path = env.root_dir.path().join("retail$sales$orders.lance");
 
     let sql = format!(
         "SELECT order_id, amount FROM '{}' WHERE amount >= 200 ORDER BY order_id",
@@ -294,10 +288,7 @@ async fn url_literal_select_orders_by_amount() -> Result<()> {
 async fn url_literal_join_customers_with_catalog_orders() -> Result<()> {
     let env = setup_temp_env().await?;
 
-    let customers_path = env
-        .root_dir
-        .path()
-        .join("retail$sales$customers.lance");
+    let customers_path = env.root_dir.path().join("retail$sales$customers.lance");
 
     let sql = format!(
         "SELECT c.name, o.order_id, o.amount \
@@ -334,14 +325,8 @@ async fn url_literal_join_customers_with_catalog_orders() -> Result<()> {
 async fn insert_into_from_url_literal_sources() -> Result<()> {
     let env = setup_temp_env().await?;
 
-    let customers_path = env
-        .root_dir
-        .path()
-        .join("retail$sales$customers.lance");
-    let orders_path = env
-        .root_dir
-        .path()
-        .join("retail$sales$orders.lance");
+    let customers_path = env.root_dir.path().join("retail$sales$customers.lance");
+    let orders_path = env.root_dir.path().join("retail$sales$orders.lance");
 
     let sql = format!(
         "INSERT INTO retail.sales.high_value_orders \

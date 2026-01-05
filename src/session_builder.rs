@@ -80,11 +80,6 @@ impl SessionBuilder {
         }
 
         for (catalog_name, namespace) in self.catalogs {
-            println!(
-                "registering catalog: {}, namespace: {:?}",
-                catalog_name.as_str(),
-                &namespace
-            );
             ctx.register_catalog(
                 &catalog_name,
                 Arc::new(LanceCatalogProvider::try_new(namespace).await?),
@@ -115,8 +110,12 @@ impl SessionBuilder {
 
         // Register the new SessionState with each SessionStore so that
         // URL table factories can access the runtime session as needed.
-        list_factory.session_store().with_state(ctx.state_weak_ref());
-        lance_factory.session_store().with_state(ctx.state_weak_ref());
+        list_factory
+            .session_store()
+            .with_state(ctx.state_weak_ref());
+        lance_factory
+            .session_store()
+            .with_state(ctx.state_weak_ref());
 
         Ok(LanceSession::new(ctx))
     }
