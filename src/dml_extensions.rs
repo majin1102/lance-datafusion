@@ -39,11 +39,8 @@ impl LanceSession {
             return self.execute(sql).await;
         }
 
-        if let Ok(
-            Statement::Insert(_)
-                | Statement::Delete(_)
-                | Statement::Update { .. },
-        ) = parse_single_statement(sql)
+        if let Ok(Statement::Insert(_) | Statement::Delete(_) | Statement::Update { .. }) =
+            parse_single_statement(sql)
         {
             return self.execute(sql).await;
         }
@@ -210,10 +207,7 @@ async fn handle_insert(ctx: &SessionContext, insert: Insert) -> Result<DataFrame
     let uri = dataset.uri().to_string();
 
     dataset.append(reader, None).await.map_err(|e| {
-        DataFusionError::Execution(format!(
-            "Lance INSERT append failed on '{}': {}",
-            uri, e
-        ))
+        DataFusionError::Execution(format!("Lance INSERT append failed on '{}': {}", uri, e))
     })?;
 
     build_count_dataframe(affected_rows)
@@ -277,10 +271,7 @@ async fn update_table(
     })?;
 
     job.execute().await.map_err(|e| {
-        DataFusionError::Execution(format!(
-            "Lance UPDATE execution failed on '{}': {}",
-            uri, e
-        ))
+        DataFusionError::Execution(format!("Lance UPDATE execution failed on '{}': {}", uri, e))
     })?;
 
     Ok(())
@@ -330,10 +321,7 @@ async fn merge_tables(
     })?;
 
     job.execute(source_stream).await.map_err(|e| {
-        DataFusionError::Execution(format!(
-            "Lance MERGE execution failed on '{}': {}",
-            uri, e
-        ))
+        DataFusionError::Execution(format!("Lance MERGE execution failed on '{}': {}", uri, e))
     })?;
 
     Ok(())
@@ -490,8 +478,7 @@ async fn execute_lance_merge(ctx: &SessionContext, sql: &str) -> Result<DataFram
     let enable_normalization = ctx.enable_ident_normalization();
     let (target_ref, source_ref, on_key) = parse_merge_components(sql, enable_normalization)?;
 
-    let affected_rows =
-        compute_merge_affected_rows(ctx, &target_ref, &source_ref, &on_key).await?;
+    let affected_rows = compute_merge_affected_rows(ctx, &target_ref, &source_ref, &on_key).await?;
 
     merge_tables(ctx, target_ref, source_ref, &on_key).await?;
     build_count_dataframe(affected_rows)
@@ -530,9 +517,7 @@ fn parse_merge_components(
         .find(when_matched_kw)
         .map(|idx| on_pos + on_kw.len() + idx)
         .ok_or_else(|| {
-            DataFusionError::Execution(
-                "MERGE statement must contain `WHEN MATCHED`".to_string(),
-            )
+            DataFusionError::Execution("MERGE statement must contain `WHEN MATCHED`".to_string())
         })?;
 
     let target_part = sql[into_pos + merge_into.len()..using_pos].trim();
@@ -623,9 +608,13 @@ async fn compute_merge_affected_rows(
     let target_df = ctx.table(target_ref.clone()).await?;
     let source_df = ctx.table(source_ref.clone()).await?;
 
-    let matched_df = target_df
-        .clone()
-        .join(source_df.clone(), JoinType::Inner, &[on_key], &[on_key], None)?;
+    let matched_df = target_df.clone().join(
+        source_df.clone(),
+        JoinType::Inner,
+        &[on_key],
+        &[on_key],
+        None,
+    )?;
     let matched_count = matched_df.count().await? as i64;
 
     let not_matched_df =
@@ -677,7 +666,8 @@ async fn count_rows_for_table(
     let batch = &batches[0];
     if batch.num_columns() != 1 || batch.num_rows() != 1 {
         return Err(DataFusionError::Execution(
-            "Lance SQL extensions expected COUNT(*) query to return a single scalar value".to_string(),
+            "Lance SQL extensions expected COUNT(*) query to return a single scalar value"
+                .to_string(),
         ));
     }
 

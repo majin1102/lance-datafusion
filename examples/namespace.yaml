@@ -1,0 +1,13 @@
+# Example Lance namespace configuration (directory type)
+# Demonstrates CLI --config loading
+
+# Root namespace: dynamic CatalogProviderList
+lance.namespace.root.type: directory
+lance.namespace.root.path: /tmp/lance_test_root
+# Optional root id; empty string means using the namespace root
+# lance.namespace.root.id: ""
+
+# Additional named catalog: crm
+lance.namespace.catalog.crm.type: directory
+lance.namespace.catalog.crm.path: /tmp/lance_test_extra
+lance.namespace.catalog.crm.id: crm
