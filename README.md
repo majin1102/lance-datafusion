@@ -136,9 +136,90 @@ cargo build --release
 ./target/release/lance-datafusion --conf lance.namespace.root.path=/path/to/data -c "DELETE FROM retail.sales.orders WHERE amount < 100"
 ```
 
-### Configuration via `--config` and YAML
+## CLI Usage
 
-Instead of (or in addition to) `--conf`, you can provide options via a YAML file using `--config`:
+This crate also provides an executable CLI built on DataFusion's SessionContext. At startup it can optionally inject Lance namespace support (directory-backed DirectoryNamespace).
+
+### 1. Build and Run
+
+At the repository root:
+
+```bash
+cargo build
+cargo run -- --help
+```
+
+After building, the `lance-datafusion` binary can be used as a DataFusion CLI.
+
+### 2. Inject Lance namespaces via YAML configuration
+
+The CLI supports `--config` to load a YAML configuration file and `--conf` to pass extra settings:
+
+```bash
+# Use the directory-based example in examples/namespace.yaml
+cargo run -- \
+  --config examples/namespace.yaml \
+  --format table
+```
+
+The YAML is a flat key/value mapping; only keys prefixed with `lance.namespace.*` are parsed:
+
+```yaml
+lance.namespace.root.type: directory
+lance.namespace.root.path: /path/to/lance_root
+lance.namespace.root.id: ""               # optional, defaults to empty string
+
+lance.namespace.catalog.crm.type: directory
+lance.namespace.catalog.crm.path: /path/to/crm_namespace
+lance.namespace.catalog.crm.id: crm
+```
+
+Meaning:
+
+- `lance.namespace.root.*`: root directory namespace. Registered via `SessionBuilder::with_root()` as a dynamic `LanceCatalogProviderList`, exposing top-level namespaces under the root as catalogs (e.g., `retail.sales.*`).
+- `lance.namespace.catalog.<name>.*`: additional directory-backed catalogs registered via `SessionBuilder::add_catalog()` (e.g., `crm.dim.*`).
+
+When any `lance.namespace.*` settings are present, the CLI:
+
+1. Builds the corresponding directory `LanceNamespace` via `lance-namespace-impls::DirectoryNamespaceBuilder`.
+2. Uses `SessionBuilder` to create a `SessionContext` with `LanceCatalogProviderList` / `LanceCatalogProvider` registered.
+3. Executes SQL via `LanceSession` so `DELETE / UPDATE / MERGE` go through Lance DML extensions, while other statements use DataFusion's native path.
+
+If no `lance.namespace.*` settings are provided, the CLI constructs a default `SessionContext` and behaves like native DataFusion.
+
+### 3. Command-line options
+
+The CLI supports:
+
+- `--config <path>`: load a YAML configuration file (optional).
+- `--conf key=value`: additional settings; can be specified multiple times.
+  - Keys prefixed with `lance.namespace.*` are used for namespace configuration and override the same keys from YAML.
+  - Other keys (e.g., `datafusion.execution.batch_size`) are forwarded to DataFusion `ConfigOptions`.
+- `-c, --command <SQL>`: execute one or more SQL statements and then exit (repeatable).
+- `-f, --file <path>`: execute SQL statements from files and then exit (repeatable).
+- `--format <table|csv|json>`: result output format; default `table`.
+
+Examples:
+
+```bash
+# Use DataFusion defaults only
+cargo run -- --format csv \
+  --command "SELECT 1 + 2 AS sum;"
+
+# Query on an existing Lance directory namespace
+cargo run -- \
+  --config /path/to/namespace.yaml \
+  --conf lance.namespace.root.path=/data/lance_root \
+  --format json \
+  --command "SELECT * FROM retail.sales.customers LIMIT 10;"
+```
+
+Keyspace conventions:
+
+- Only directory namespaces are supported: `type=directory`.
+- If `type=service` or other types are configured, the CLI returns an error: "not supported (only 'directory')".
+
+## Limitations and Future Work
 
 ```bash
 ./target/debug/lance-datafusion --config config.yaml -c "SELECT name, amount FROM retail.sales.orders WHERE amount >= 200"

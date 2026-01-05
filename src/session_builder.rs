@@ -80,6 +80,11 @@ impl SessionBuilder {
         }
 
         for (catalog_name, namespace) in self.catalogs {
+            println!(
+                "registering catalog: {}, namespace: {:?}",
+                catalog_name.as_str(),
+                &namespace
+            );
             ctx.register_catalog(
                 &catalog_name,
                 Arc::new(LanceCatalogProvider::try_new(namespace).await?),
