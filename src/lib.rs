@@ -12,8 +12,7 @@ pub mod namespace;
 pub mod physical_plan;
 pub mod schema;
 pub mod session_builder;
-pub mod table;
-pub mod task_writer;
+pub mod table_provider;
 
 pub use catalog::{LanceCatalogProvider, LanceCatalogProviderList};
 pub use dml_extensions as dml;
