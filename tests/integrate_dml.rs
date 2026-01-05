@@ -40,7 +40,7 @@ async fn join_within_retail() -> Result<()> {
 
 #[tokio::test]
 async fn join_across_root_catalogs() -> Result<()> {
-    let env = setup::setup_temp_env().await?;
+    let env = setup_temp_env().await?;
 
     let df = env
         .session
@@ -68,7 +68,7 @@ async fn join_across_root_catalogs() -> Result<()> {
 
 #[tokio::test]
 async fn join_across_catalogs() -> Result<()> {
-    let env = setup::setup_temp_env().await?;
+    let env = setup_temp_env().await?;
 
     let df = env
         .session
@@ -96,7 +96,7 @@ async fn join_across_catalogs() -> Result<()> {
 
 #[tokio::test]
 async fn aggregation_city_totals() -> Result<()> {
-    let env = setup::setup_temp_env().await?;
+    let env = setup_temp_env().await?;
 
     let df = env
         .session
@@ -131,7 +131,7 @@ async fn aggregation_city_totals() -> Result<()> {
 
 #[tokio::test]
 async fn cte_view_customer_orders() -> Result<()> {
-    let env = setup::setup_temp_env().await?;
+    let env = setup_temp_env().await?;
 
     let df = env
         .session
@@ -163,7 +163,7 @@ async fn cte_view_customer_orders() -> Result<()> {
 
 #[tokio::test]
 async fn insert_into_select_high_value() -> Result<()> {
-    let env = setup::setup_temp_env().await?;
+    let env = setup_temp_env().await?;
 
     let df = env
         .session
@@ -175,6 +175,188 @@ async fn insert_into_select_high_value() -> Result<()> {
                ON c.customer_id = o.customer_id \
              WHERE o.amount >= 200",
         )
+        .await
+        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+
+    df.collect()
+        .await
+        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+
+    let dataset = DatasetBuilder::from_namespace(
+        Arc::new(
+            DirectoryNamespaceBuilder::new(env.root_dir.path().to_string_lossy())
+                .manifest_enabled(true)
+                .dir_listing_enabled(true)
+                .build()
+                .await?,
+        ),
+        vec![
+            "retail".to_string(),
+            "sales".to_string(),
+            "high_value_orders".to_string(),
+        ],
+        false,
+    )
+    .await?
+    .load()
+    .await?;
+
+    let mut scanner = dataset.scan();
+    scanner
+        .project(&["id", "name", "amount"])
+        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+    let mut stream = scanner
+        .try_into_stream()
+        .await
+        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+
+    let mut rows = Vec::<(i32, String, i32)>::new();
+    while let Some(batch) = stream.next().await {
+        let batch = batch.map_err(|e| DataFusionError::Execution(e.to_string()))?;
+        let id_col = col::<Int32Array>(&batch, 0);
+        let name_col = col::<StringArray>(&batch, 1);
+        let amount_col = col::<Int32Array>(&batch, 2);
+
+        for i in 0..batch.num_rows() {
+            rows.push((
+                id_col.value(i),
+                name_col.value(i).to_string(),
+                amount_col.value(i),
+            ));
+        }
+    }
+
+    assert_eq!(rows.len(), 2);
+    assert!(rows.contains(&(2, "Bob".to_string(), 200)));
+    assert!(rows.contains(&(3, "Carol".to_string(), 300)));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn url_literal_select_customers_by_id() -> Result<()> {
+    let env = setup_temp_env().await?;
+
+    let path = env
+        .root_dir
+        .path()
+        .join("retail$sales$customers.lance");
+
+    let sql = format!(
+        "SELECT name FROM '{}' WHERE customer_id = 2",
+        path.to_string_lossy(),
+    );
+
+    let df = env.session.sql(&sql).await?;
+    let batches = df.collect().await?;
+    assert_eq!(batches.len(), 1);
+    let batch = &batches[0];
+    assert_eq!(batch.num_rows(), 1);
+
+    let name_col = col::<StringArray>(batch, 0);
+    assert_eq!(name_col.value(0), "Bob");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn url_literal_select_orders_by_amount() -> Result<()> {
+    let env = setup_temp_env().await?;
+
+    let path = env
+        .root_dir
+        .path()
+        .join("retail$sales$orders.lance");
+
+    let sql = format!(
+        "SELECT order_id, amount FROM '{}' WHERE amount >= 200 ORDER BY order_id",
+        path.to_string_lossy(),
+    );
+
+    let df = env.session.sql(&sql).await?;
+    let batches = df.collect().await?;
+    assert_eq!(batches.len(), 1);
+    let batch = &batches[0];
+    assert_eq!(batch.num_rows(), 2);
+
+    let order_id_col = col::<Int32Array>(batch, 0);
+    let amount_col = col::<Int32Array>(batch, 1);
+
+    assert_eq!(order_id_col.value(0), 102);
+    assert_eq!(amount_col.value(0), 200);
+    assert_eq!(order_id_col.value(1), 103);
+    assert_eq!(amount_col.value(1), 300);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn url_literal_join_customers_with_catalog_orders() -> Result<()> {
+    let env = setup_temp_env().await?;
+
+    let customers_path = env
+        .root_dir
+        .path()
+        .join("retail$sales$customers.lance");
+
+    let sql = format!(
+        "SELECT c.name, o.order_id, o.amount \
+         FROM '{}' c \
+         JOIN retail.sales.orders o \
+           ON c.customer_id = o.customer_id \
+         WHERE o.amount >= 200 \
+         ORDER BY o.order_id",
+        customers_path.to_string_lossy(),
+    );
+
+    let df = env.session.sql(&sql).await?;
+    let batches = df.collect().await?;
+    assert_eq!(batches.len(), 1);
+    let batch = &batches[0];
+    assert_eq!(batch.num_rows(), 2);
+
+    let name_col = col::<StringArray>(batch, 0);
+    let order_id_col = col::<Int32Array>(batch, 1);
+    let amount_col = col::<Int32Array>(batch, 2);
+
+    assert_eq!(name_col.value(0), "Bob");
+    assert_eq!(order_id_col.value(0), 102);
+    assert_eq!(amount_col.value(0), 200);
+
+    assert_eq!(name_col.value(1), "Carol");
+    assert_eq!(order_id_col.value(1), 103);
+    assert_eq!(amount_col.value(1), 300);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn insert_into_from_url_literal_sources() -> Result<()> {
+    let env = setup_temp_env().await?;
+
+    let customers_path = env
+        .root_dir
+        .path()
+        .join("retail$sales$customers.lance");
+    let orders_path = env
+        .root_dir
+        .path()
+        .join("retail$sales$orders.lance");
+
+    let sql = format!(
+        "INSERT INTO retail.sales.high_value_orders \
+         SELECT c.customer_id AS id, c.name, o.amount \
+         FROM '{}' c \
+         JOIN '{}' o \
+           ON c.customer_id = o.customer_id \
+         WHERE o.amount >= 200",
+        customers_path.to_string_lossy(),
+        orders_path.to_string_lossy(),
+    );
+
+    let df = env
+        .session
+        .sql(&sql)
         .await
         .map_err(|e| DataFusionError::Execution(e.to_string()))?;
 
