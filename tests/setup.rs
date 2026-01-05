@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
+#![allow(dead_code)]
 use std::path::Path;
 use std::sync::Arc;
 
-use arrow_array::{Int32Array, Int64Array, RecordBatch, RecordBatchIterator, StringArray};
+use arrow_array::{Int32Array, RecordBatch, RecordBatchIterator, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use datafusion::error::{DataFusionError, Result};
 use lance::dataset::{WriteMode, WriteParams};
@@ -18,9 +19,10 @@ use tempfile::TempDir;
 /// Shared test session wrapper used by integration tests.
 ///
 /// It holds the root namespace and the LanceSession built on top of it.
-pub struct TestSession {
-    pub root_ns: Arc<dyn LanceNamespace>,
+pub struct TestEnv {
     pub session: LanceSession,
+    pub root_dir: TempDir,
+    pub extra_dir: TempDir,
 }
 
 /// Build customers fixture data.
@@ -281,22 +283,10 @@ async fn populate_directories_internal(
     Ok((Arc::new(root_dir_ns), Arc::new(extra_dir_ns)))
 }
 
-/// Populate on-disk directories with all fixture tables and namespaces.
-///
-/// This is suitable for tests that only need to run the CLI against
-/// prepared directories without building a LanceSession directly.
-pub async fn populate_directories(root_path: &Path, extra_path: &Path) -> Result<()> {
-    let _ = populate_directories_internal(root_path, extra_path).await?;
-    Ok(())
-}
-
 /// Build a LanceSession and root namespace against the given directories.
 ///
 /// This is used by integration tests that work directly with LanceSession.
-pub async fn build_session_with_root_and_catalog(
-    root_path: &Path,
-    extra_path: &Path,
-) -> Result<TestSession> {
+pub async fn build_lance_session(root_path: &Path, extra_path: &Path) -> Result<LanceSession> {
     let (root_ns, extra_ns) = populate_directories_internal(root_path, extra_path).await?;
 
     let session = SessionBuilder::new()
@@ -308,18 +298,35 @@ pub async fn build_session_with_root_and_catalog(
         .build()
         .await?;
 
-    Ok(TestSession { root_ns, session })
+    Ok(session)
 }
 
 /// Create temporary root/extra directories, populate them, and build a test session.
 ///
 /// The TempDir values must be kept alive by the caller to ensure the
 /// underlying data remains available for the duration of the test.
-pub async fn make_temp_env() -> Result<(TempDir, TempDir, TestSession)> {
+pub async fn setup_temp_env() -> Result<TestEnv> {
     let root_dir = TempDir::new()?;
     let extra_dir = TempDir::new()?;
 
-    let session = build_session_with_root_and_catalog(root_dir.path(), extra_dir.path()).await?;
+    let session = build_lance_session(root_dir.path(), extra_dir.path()).await?;
 
-    Ok((root_dir, extra_dir, session))
+    Ok(TestEnv {
+        session,
+        root_dir,
+        extra_dir,
+    })
+}
+
+pub fn col<T: 'static>(batch: &RecordBatch, idx: usize) -> &T {
+    batch.column(idx).as_any().downcast_ref::<T>().unwrap()
+}
+
+/// Populate on-disk directories with all fixture tables and namespaces.
+///
+/// This is suitable for tests that only need to run the CLI against
+/// prepared directories without building a LanceSession directly.
+pub async fn populate_directories(root_path: &Path, extra_path: &Path) -> Result<()> {
+    populate_directories_internal(root_path, extra_path).await?;
+    Ok(())
 }

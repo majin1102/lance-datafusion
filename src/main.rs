@@ -305,7 +305,7 @@ fn parse_lance_namespace_config(
         let id = root_id
             .as_deref()
             .map(parse_namespace_id)
-            .unwrap_or_else(Vec::new);
+            .unwrap_or_default();
         cfg.root = Some(DirectoryNamespaceConfig { path, id });
     }
 
@@ -332,9 +332,9 @@ fn parse_lance_namespace_config(
                 "lance.namespace.catalog.{name}.path is required when catalog namespace is configured"
             )
         })?;
-        let id_str = catalog_ids.get(&name).ok_or_else(|| {
-            anyhow::anyhow!("lance.namespace.catalog.{name}.id is required")
-        })?;
+        let id_str = catalog_ids
+            .get(&name)
+            .ok_or_else(|| anyhow::anyhow!("lance.namespace.catalog.{name}.id is required"))?;
         let id = parse_namespace_id(id_str);
         if id.is_empty() {
             bail!("lance.namespace.catalog.{name}.id must not be empty");
@@ -357,16 +357,16 @@ fn parse_lance_namespace_config(
 
 fn build_session_config(df_options: &HashMap<String, String>) -> Result<SessionConfig> {
     if df_options.is_empty() {
-        let config = SessionConfig::new()
-            .with_information_schema(true);
+        let config = SessionConfig::new().with_information_schema(true);
         return Ok(config);
     }
 
-    SessionConfig::from_string_hash_map(df_options)
-        .with_context(|| "failed to build DataFusion SessionConfig from key/value options".to_string())
+    SessionConfig::from_string_hash_map(df_options).with_context(|| {
+        "failed to build DataFusion SessionConfig from key/value options".to_string()
+    })
 }
 
-async fn build_directory_ns_arc(path: &str) -> Result<Arc<dyn LanceNamespace>> {
+async fn build_directory_ns(path: &str) -> Result<Arc<dyn LanceNamespace>> {
     let ns_impl = DirectoryNamespaceBuilder::new(path.to_string())
         .manifest_enabled(true)
         .dir_listing_enabled(true)
@@ -385,7 +385,7 @@ async fn build_lance_session(
 
     if let Some(cfg) = lance_cfg {
         if let Some(root) = cfg.root {
-            let root_ns = build_directory_ns_arc(&root.path).await?;
+            let root_ns = build_directory_ns(&root.path).await?;
             let ns = if root.id.is_empty() {
                 Namespace::from_root(Arc::clone(&root_ns))
             } else {
@@ -395,7 +395,7 @@ async fn build_lance_session(
         }
 
         for (catalog_name, ns_cfg) in cfg.catalogs {
-            let catalog_ns = build_directory_ns_arc(&ns_cfg.path).await?;
+            let catalog_ns = build_directory_ns(&ns_cfg.path).await?;
             let ns = Namespace::from_namespace(Arc::clone(&catalog_ns), ns_cfg.id.clone());
             builder = builder.add_catalog(&catalog_name, ns);
         }

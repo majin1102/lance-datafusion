@@ -2,26 +2,19 @@
 
 use std::sync::Arc;
 
-use arrow_array::{Int32Array, Int64Array, RecordBatch, StringArray};
+mod setup;
+use crate::setup::{col, setup_temp_env};
+use arrow_array::{Int32Array, Int64Array, StringArray};
 use datafusion::error::{DataFusionError, Result};
 use futures::StreamExt;
 use lance::dataset::builder::DatasetBuilder;
-use lance::Dataset;
-
-mod setup;
-
-use setup::TestSession;
-
-fn col<T: 'static>(batch: &RecordBatch, idx: usize) -> &T {
-    batch.column(idx).as_any().downcast_ref::<T>().unwrap()
-}
-
+use lance_namespace_impls::DirectoryNamespaceBuilder;
 
 #[tokio::test]
 async fn join_within_retail() -> Result<()> {
-    let (_root_dir, _extra_dir, context) = setup::make_temp_env().await?;
+    let env = setup_temp_env().await?;
 
-    let df = context
+    let df = env
         .session
         .sql(
             "SELECT customers.name, orders.amount \
@@ -47,9 +40,9 @@ async fn join_within_retail() -> Result<()> {
 
 #[tokio::test]
 async fn join_across_root_catalogs() -> Result<()> {
-    let (_root_dir, _extra_dir, context) = setup::make_temp_env().await?;
+    let env = setup::setup_temp_env().await?;
 
-    let df = context
+    let df = env
         .session
         .sql(
             "SELECT c.name, o2.amount \
@@ -75,9 +68,9 @@ async fn join_across_root_catalogs() -> Result<()> {
 
 #[tokio::test]
 async fn join_across_catalogs() -> Result<()> {
-    let (_root_dir, _extra_dir, context) = setup::make_temp_env().await?;
+    let env = setup::setup_temp_env().await?;
 
-    let df = context
+    let df = env
         .session
         .sql(
             "SELECT customers.name, dim.segment \
@@ -103,9 +96,9 @@ async fn join_across_catalogs() -> Result<()> {
 
 #[tokio::test]
 async fn aggregation_city_totals() -> Result<()> {
-    let (_root_dir, _extra_dir, context) = setup::make_temp_env().await?;
+    let env = setup::setup_temp_env().await?;
 
-    let df = context
+    let df = env
         .session
         .sql(
             "SELECT city, SUM(amount) AS total \
@@ -138,9 +131,9 @@ async fn aggregation_city_totals() -> Result<()> {
 
 #[tokio::test]
 async fn cte_view_customer_orders() -> Result<()> {
-    let (_root_dir, _extra_dir, context) = setup::make_temp_env().await?;
+    let env = setup::setup_temp_env().await?;
 
-    let df = context
+    let df = env
         .session
         .sql(
             "WITH customer_orders AS ( \
@@ -170,9 +163,9 @@ async fn cte_view_customer_orders() -> Result<()> {
 
 #[tokio::test]
 async fn insert_into_select_high_value() -> Result<()> {
-    let (_root_dir, _extra_dir, context) = setup::make_temp_env().await?;
+    let env = setup::setup_temp_env().await?;
 
-    let df = context
+    let df = env
         .session
         .sql(
             "INSERT INTO retail.sales.high_value_orders \
@@ -190,7 +183,13 @@ async fn insert_into_select_high_value() -> Result<()> {
         .map_err(|e| DataFusionError::Execution(e.to_string()))?;
 
     let dataset = DatasetBuilder::from_namespace(
-        Arc::clone(&context.root_ns),
+        Arc::new(
+            DirectoryNamespaceBuilder::new(env.root_dir.path().to_string_lossy())
+                .manifest_enabled(true)
+                .dir_listing_enabled(true)
+                .build()
+                .await?,
+        ),
         vec![
             "retail".to_string(),
             "sales".to_string(),

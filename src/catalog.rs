@@ -37,7 +37,10 @@ pub struct LanceCatalogProviderList {
 impl LanceCatalogProviderList {
     pub async fn try_new(namespace: Namespace) -> Result<Self> {
         let catalogs = fetch_catalogs(&namespace).await?;
-        Ok(Self { namespace, catalogs })
+        Ok(Self {
+            namespace,
+            catalogs,
+        })
     }
 
     pub async fn refresh(&mut self) -> Result<()> {
@@ -128,7 +131,9 @@ impl CatalogProvider for LanceCatalogProvider {
     }
 }
 
-pub async fn fetch_catalogs(namespace: &Namespace) -> Result<DashMap<String, Arc<dyn CatalogProvider>>> {
+pub async fn fetch_catalogs(
+    namespace: &Namespace,
+) -> Result<DashMap<String, Arc<dyn CatalogProvider>>> {
     let catalogs = DashMap::new();
     for child_namespace in namespace.children().await?.into_iter() {
         let catalog_name = child_namespace.name().to_string();
@@ -138,7 +143,9 @@ pub async fn fetch_catalogs(namespace: &Namespace) -> Result<DashMap<String, Arc
     Ok(catalogs)
 }
 
-pub async fn fetch_schemas(namespace: &Namespace) -> Result<DashMap<String, Arc<dyn SchemaProvider>>> {
+pub async fn fetch_schemas(
+    namespace: &Namespace,
+) -> Result<DashMap<String, Arc<dyn SchemaProvider>>> {
     let schemas = DashMap::new();
     for child_namespace in namespace.children().await?.into_iter() {
         let schema_name = child_namespace.name().to_string();
